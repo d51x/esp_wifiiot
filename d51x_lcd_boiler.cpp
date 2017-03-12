@@ -20,7 +20,9 @@
 #define str_page_header_4 "**** MAX Current ***"
 
 #define PAGES_COUNT 4
+
 uint8_t page = 0;
+
 
 void update_LCD() {
 	uint8_t   lcd_line = 0;
@@ -52,6 +54,7 @@ void update_LCD() {
 			os_memset(lcd_line_text, 0, 40);	
 			lcd_line = 2;
 			temp = data1wire[1];  // 
+			temp = analogRead();
 			os_sprintf(lcd_line_text, page1_line3, (GPIO_ALL_GET(GPIO_HOTCAB) == 1) ? "ON " : "OFF", (int)(temp / 10), (int)(temp % 10));
 			LCD_print(lcd_line, lcd_line_text);		
 			
@@ -60,7 +63,7 @@ void update_LCD() {
 			lcd_line = 3;
 			temp = dht_t1;
 			uint16_t hum = dht_h1;
-			os_sprintf(lcd_line_text, page1_line4, (int)(temp / 10), (int)(temp % 10), (int)(hum / 10), (int)(hum % 10));
+			os_sprintf(lcd_line_text, page1_line4, (int)(hum / 10), (int)(hum % 10), (int)(temp / 10), (int)(temp % 10));
 			LCD_print(lcd_line, lcd_line_text);	
 			break;	
 		case 1:
@@ -86,7 +89,6 @@ startfunc(){
 void ICACHE_FLASH_ATTR
  timerfunc(uint32_t  timersrc) {
 // выполнение кода каждую 1 секунду
-
  update_LCD();
 
 if(timersrc%30==0){
@@ -95,5 +97,6 @@ if(timersrc%30==0){
 }
 
 void webfunc(char *pbuf) {
-os_sprintf(HTTPBUFF,"<br>analogRead() = %d", analogRead()); // вывод данных на главной модуля
+os_sprintf(HTTPBUFF,"<br>analogRead() = %d %d %d %d", ADCdata[3], ADCdata[0], ADCdata[1], ADCdata[2] ); // вывод данных на главной модуля
+
 }
