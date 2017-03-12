@@ -68,7 +68,7 @@ void update_LCD() {
 			break;	
 		case 1:
 			os_memset(lcd_line_text, 0, 40);	
-			LCD_print(2, lcd_line_text);	
+			LCD_print(0, "PCF 8591 ADC Data");	
 			LCD_print(3, lcd_line_text);	
 			break;
 		case 2:
