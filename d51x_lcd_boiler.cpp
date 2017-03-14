@@ -23,7 +23,7 @@
 #define ADC_divider_mA 296
 #define ADC_zero 128
 
-#define MIN_CUR_PUMP 200
+#define MIN_CUR_PUMP 100
 
 #define PAGES_COUNT 4
 
@@ -116,7 +116,7 @@ void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 			// ***************** page 1, line 1 ******************************
 			os_memset(lcd_line_text, 0, 40);	
 			lcd_line = 0;
-			os_sprintf(lcd_line_text, page1_line2, (abs(adc0-ADC_zero) > MIN_CUR_PUMP) ? "ON " : "OFF", (GPIO_ALL_GET(gpio_pump) == 1) ? "ON " : "OFF");
+			os_sprintf(lcd_line_text, page1_line2, (adc0 > MIN_CUR_PUMP) ? "ON " : "OFF", (GPIO_ALL_GET(gpio_pump) == 1) ? "ON " : "OFF");
 			LCD_print(lcd_line, lcd_line_text);	
 	
 			// ***************** page 1, line 2 ******************************
