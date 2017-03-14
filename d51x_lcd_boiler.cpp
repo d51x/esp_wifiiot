@@ -63,8 +63,8 @@ uint8_t max_adc2_month = 0;
 void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 	
 	uint8_t show_min = 0;
-	if(timersrc%2==0){
-		// выполнение кода каждые 2 секунд
+	if(timersrc%4==0){
+		// выполнение кода каждые 4 секунд
 		show_min = 1;
 	} else {
 		show_min = 0;
@@ -79,8 +79,8 @@ void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 		if (page > PAGES_COUNT - 1) page = 0;
 	} 
 	
-	adc0 = (ADCdata[1] - 128)*296;
-	if (adc0 < 0 ) adc0 *= -1;
+	adc0 = abs(ADCdata[1] - 128)*296;
+	//if (adc0 < 0 ) adc0 *= -1;
 	if (adc0 > max_adc0 ) { 
 		max_adc0 = adc0;
 		max_adc0_hour = time_loc.hour;
@@ -89,8 +89,8 @@ void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 		//max_adc0_month = time_loc.month;
 	}
 	
-	adc1 = (ADCdata[3] - 128)*296;
-	if (adc1 < 0 ) adc1 *= -1;		
+	adc1 = abs(ADCdata[3] - 128)*296;
+	//if (adc1 < 0 ) adc1 *= -1;		
 	if (adc1 > max_adc1 ) { 
 		max_adc1 = adc1;
 		max_adc1_hour = time_loc.hour;
@@ -100,8 +100,8 @@ void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 		
 	}
 	
-	adc2 = (ADCdata[0] - 128)*296;
-	if (adc2 < 0 ) adc2 *= -1;		
+	adc2 = abs(ADCdata[0] - 128)*296;
+	//if (adc2 < 0 ) adc2 *= -1;		
 	if (adc2 > max_adc2 ) { 
 		max_adc2 = adc2;
 		max_adc2_hour = time_loc.hour;
@@ -116,7 +116,7 @@ void ICACHE_FLASH_ATTR update_LCD(uint32_t  timersrc) {
 			// ***************** page 1, line 1 ******************************
 			os_memset(lcd_line_text, 0, 40);	
 			lcd_line = 0;
-			os_sprintf(lcd_line_text, page1_line2, (GPIO_ALL_GET(gpio_pump) == 1) ? "ON " : "OFF", (adc0 > MIN_CUR_PUMP) ? "ON " : "OFF");
+			os_sprintf(lcd_line_text, page1_line2, (abs(adc0-ADC_zero) > MIN_CUR_PUMP) ? "ON " : "OFF", (GPIO_ALL_GET(gpio_pump) == 1) ? "ON " : "OFF");
 			LCD_print(lcd_line, lcd_line_text);	
 	
 			// ***************** page 1, line 2 ******************************
