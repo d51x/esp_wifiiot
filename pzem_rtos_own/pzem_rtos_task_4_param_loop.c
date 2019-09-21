@@ -9,10 +9,10 @@
 
 #include "driver/uart.h"
 
-//#define MQTT
+#define MQTT
 
 //#define DEBUG
-#define FW_VER_NUM "3.5"
+#define FW_VER_NUM "3.6"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM + " debug"
@@ -29,13 +29,10 @@
 
 #define CMD_VOLTAGE 		0xB0
 #define RESP_VOLTAGE 		0xA0
-
 #define CMD_CURRENT 		0xB1
 #define RESP_CURRENT 		0xA1
-
 #define CMD_POWER   		0xB2
 #define RESP_POWER   		0xA2
-
 #define CMD_ENERGY  		0xB3
 #define RESP_ENERGY  		0xA3
 
@@ -62,10 +59,10 @@ typedef struct PZEMCommand {
 	#define MQTT_SEND_INTERVAL 2000
 	#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
 	#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
-	#define POWER_MQTT_TOPIC_PARAM	"pmw"
-	#define ENERGY_MQTT_TOPIC_PARAM	"pmwh"
+	#define POWER_MQTT_TOPIC_PARAM		"pmw"
+	#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
 	#define MQTT_PAYLOAD_BUF 20
-	//MQTT_Client* mqtt_client;
+	//MQTT_Client* mqtt_client;    //for non os sdk
 	char payload[MQTT_PAYLOAD_BUF];
 	uint32_t mqtt_send_interval = 0;
 
@@ -73,11 +70,6 @@ typedef struct PZEMCommand {
 	void vMqttSendTimerCallback( TimerHandle_t xTimer );
 #endif
 
-
-
-
-
-uint32_t duration = 0;
 float voltage = 0;
 float current = 0;
 float power = 0;
@@ -87,27 +79,22 @@ uint8_t delayed_counter = DELAYED_START;
 
 static TimerHandle_t system_start_timer;
 
-
-uint8_t pzem_enabled = 0;
-
 void vSystemStartTimerCallback( TimerHandle_t xTimer );
 
-void read_pzem_task( void * pvParameters );
+// uart0
+void send_buffer(const uint8_t *buffer, uint8_t len);
+uint8_t read_buffer(uint8_t *buffer, uint8_t cnt);
+
+uint8_t pzem_enabled = 0;
+void read_electro_task( void * pvParameters );
 void read_voltage();
 void read_current();
 void read_power();
 void read_energy();
 
-
-void send_buffer(const uint8_t *buffer, uint8_t len);
-uint8_t read_buffer(uint8_t *buffer, uint8_t cnt);
-
-
 uint8_t pzem_crc(uint8_t *data, uint8_t sz);
-
 void pzem_send (uint8_t *addr, uint8_t cmd);
 uint8_t pzem_read(uint8_t resp, uint8_t *data);
-
 float pzem_voltage(uint8_t *addr);
 float pzem_current(uint8_t *addr);
 float pzem_power(uint8_t *addr);
@@ -142,21 +129,18 @@ static void uart_init() {
 #ifdef DEBUG	
 	uart_param_config(UART_NUM_1, &uart_config);
 	uart_driver_install(UART_NUM_1, BUF_SIZE * 2, BUF_SIZE * 2, 100, NULL);	
-	
 	os_install_putc1(userlog);
 #endif	
 }
 
 uint8_t get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
 	uint8_t reinit = 1;
-	reinit =  r && pzem_enabled != sensors_param.cfgdes[0];  // данные изменились
+	reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
 	pzem_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные pzem
 
 #ifdef MQTT	
-	// TODO 
-	reinit = r && mqtt_send_interval != sensors_param.cfgdes[1];
-	mqtt_send_interval = (sensors_param.cfgdes[1] == 0) ? sensors_param.mper : MQTT_SEND_INTERVAL;	
-	
+	reinit = r && (mqtt_send_interval != sensors_param.cfgdes[1]);
+	mqtt_send_interval = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : MQTT_SEND_INTERVAL;		
 #endif	
 	return reinit;
 }
@@ -168,19 +152,19 @@ void startfunc(){
 	 userlog("\nFiwrmware: %s \n", FW_VER);
 #endif 
 	get_config_values(0);
-	
 	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
 	xTimerStart( system_start_timer, 0);
-
-
 }
 
 void timerfunc(uint32_t  timersrc) {
 	// выполнение кода каждую 1 секунду
-	
-	get_config_values(1);
-	
+	if ( get_config_values(1) == 1 ) {
+		// reinit
+#ifdef MQTT		
+		xTimerChangePeriod(mqtt_send_timer, pdMS_TO_TICKS( mqtt_send_interval ), 100);
+#endif		
+	}
 	if(timersrc%30==0){
 		// выполнение кода каждые 30 секунд
 	}
@@ -203,11 +187,10 @@ void vSystemStartTimerCallback( TimerHandle_t xTimer ){
 #ifdef DEBUG
 	userlog("\n%s\n", __func__);
 #endif	
-	xTaskCreate(read_pzem_task, "read_pzem_task", 2048, NULL, 5, NULL); 
+	xTaskCreate(read_electro_task, "read_electro_task", 2048, NULL, 5, NULL); 
 
-//TODO
 #ifdef MQTT
- 	mqtt_client = (MQTT_Client*) &mqttClient;
+ 	//mqtt_client = (MQTT_Client*) &mqttClient;  // for non os sdk
 	mqtt_send_timer = xTimerCreate("mqtt send timer", pdMS_TO_TICKS( mqtt_send_interval ), pdTRUE, 0, vMqttSendTimerCallback);
 	xTimerStart( mqtt_send_timer, 0);
 #endif
@@ -290,7 +273,6 @@ void read_current(){
 	pauseTask( PZEM_PAUSE_TASK );
 }
 
-
 void read_power(){
 	if ( !pzem_enabled ) return;
 	power = pzem_power(pzem_addr);
@@ -299,7 +281,6 @@ void read_power(){
 #endif		
 	pauseTask( PZEM_PAUSE_TASK );
 }
-
 
 void read_energy(){
 	if ( !pzem_enabled ) return;
@@ -310,8 +291,7 @@ void read_energy(){
 	pauseTask( PZEM_PAUSE_TASK );
 }
 
-
-void read_pzem_task( void * pvParameters ){
+void read_electro_task( void * pvParameters ){
 	for(;;){
 		if ( !pzem_enabled ) { 
 			vTaskDelete(NULL);
@@ -363,29 +343,29 @@ uint8_t read_buffer(uint8_t *buffer, uint8_t cnt){
 
 #ifdef MQTT
 void vMqttSendTimerCallback( TimerHandle_t xTimer ) {
-/*
+
 	if ( !sensors_param.mqtten ) return;
 
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d.%d", (int)voltage, 		(int)(voltage*10) % 10);
-	MQTT_Publish(mqtt_client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
+	MQTT_Publish(client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	pauseTask(20);
 
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d.%d", (int)current, 		(int)(current*100) % 100);
-	MQTT_Publish(mqtt_client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
+	MQTT_Publish(client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	pauseTask(20);
 
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d", (int)power);
-	MQTT_Publish(mqtt_client, POWER_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
+	MQTT_Publish(client, POWER_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	pauseTask(20);
 
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d", (int)energy);
-	MQTT_Publish(mqtt_client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
+	MQTT_Publish(client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	pauseTask(20);
-	*/
+	
 }	
 #endif
 
