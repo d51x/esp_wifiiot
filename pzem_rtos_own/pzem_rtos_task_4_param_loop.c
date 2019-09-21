@@ -9,18 +9,18 @@
 
 #include "driver/uart.h"
 
-#define MQTT
+#define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "3.6"
+#define FW_VER_NUM "3.7.2"
 
 #ifdef DEBUG
-#define FW_VER FW_VER_NUM + " debug"
+#define FW_VER FW_VER_NUM  " debug"
 #else
 #define FW_VER FW_VER_NUM
 #endif	
 
-#define DELAYED_START					40   //sec
+#define DELAYED_START					10   //sec
 
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
@@ -41,9 +41,6 @@
 #define millis() (unsigned long) (esp_timer_get_time() / 1000ULL) 
 #define pauseTask(delay)  (vTaskDelay(delay / portTICK_PERIOD_MS))
 
-#define RESPONSE_SIZE sizeof(PZEMCommand)
-#define RESPONSE_DATA_SIZE RESPONSE_SIZE - 2
-
 typedef  uint8_t PZEMAddress[4] ;
 PZEMAddress pzem_addr = {192, 168, 1, 1};
 
@@ -55,8 +52,12 @@ typedef struct PZEMCommand {
 } PZEMCommand;
 
 
-#ifdef MQTT
-	#define MQTT_SEND_INTERVAL 2000
+#define RESPONSE_SIZE sizeof(PZEMCommand)
+#define RESPONSE_DATA_SIZE RESPONSE_SIZE - 2
+
+
+#ifdef MQTTD
+	#define MQTT_SEND_INTERVAL 10 // sec
 	#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
 	#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
 	#define POWER_MQTT_TOPIC_PARAM		"pmw"
@@ -64,11 +65,12 @@ typedef struct PZEMCommand {
 	#define MQTT_PAYLOAD_BUF 20
 	//MQTT_Client* mqtt_client;    //for non os sdk
 	char payload[MQTT_PAYLOAD_BUF];
-	uint32_t mqtt_send_interval = 0;
+	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
 
 	static TimerHandle_t mqtt_send_timer;	
 	void vMqttSendTimerCallback( TimerHandle_t xTimer );
 #endif
+
 
 float voltage = 0;
 float current = 0;
@@ -78,7 +80,7 @@ float energy = 0;
 uint8_t delayed_counter = DELAYED_START;
 
 static TimerHandle_t system_start_timer;
-
+//static volatile os_timer_t system_start_timer; 
 void vSystemStartTimerCallback( TimerHandle_t xTimer );
 
 // uart0
@@ -134,14 +136,15 @@ static void uart_init() {
 }
 
 uint8_t get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
-	uint8_t reinit = 1;
-	reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
+	uint8_t reinit = 0;
+	//reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
 	pzem_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные pzem
-
-#ifdef MQTT	
-	reinit = r && (mqtt_send_interval != sensors_param.cfgdes[1]);
-	mqtt_send_interval = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : MQTT_SEND_INTERVAL;		
+/*
+#ifdef MQTTD	
+	reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
+	mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
 #endif	
+*/
 	return reinit;
 }
 
@@ -154,17 +157,48 @@ void startfunc(){
 	get_config_values(0);
 	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
-	xTimerStart( system_start_timer, 0);
+	//os_timer_disarm(&system_start_timer);
+	//os_timer_setfn(&system_start_timer, (os_timer_func_t *)vSystemStartTimerCallback, NULL);
+	//os_timer_arm(&system_start_timer, DELAYED_START * 1000, 0);
+
+#ifdef DEBUG	
+	if ( system_start_timer == NULL ) {
+		userlog("FAIL: Timer system_start_timer was not created \n");
+	} else {
+		userlog("PASS: Timer system_start_timer was created \n");
+	}
+#endif
+
+BaseType_t b = xTimerStart( system_start_timer, 0);
+
+#ifdef DEBUG	
+	if ( b != pdPASS ) {
+		userlog("FAIL: the timer system_start_timer couldn't start\n");
+	} else {
+		userlog("PASS: the timer system_start_timer was started\n");
+	}
+#endif	
 }
 
 void timerfunc(uint32_t  timersrc) {
 	// выполнение кода каждую 1 секунду
-	if ( get_config_values(1) == 1 ) {
-		// reinit
-#ifdef MQTT		
-		xTimerChangePeriod(mqtt_send_timer, pdMS_TO_TICKS( mqtt_send_interval ), 100);
-#endif		
+	//userlog("%s\n", __func__);
+	/*
+	if ( xTimerIsTimerActive(system_start_timer) != pdFALSE ) {
+		userlog("PASS: Timer system_start_timer is active\n");
+	} else {
+		userlog("FAIL: timer system_start_timer is not active\n");
 	}
+	*/
+	//if ( get_config_values(1) == 1 ) {
+		// reinit
+/*		
+#ifdef MQTTD		
+		//if ( mqtt_send_timer != NULL && ( xTimerIsTimerActive(mqtt_send_timer) != pdFALSE )) 
+		//	xTimerChangePeriod(mqtt_send_timer, pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), 100);
+#endif		
+*/
+	//}
 	if(timersrc%30==0){
 		// выполнение кода каждые 30 секунд
 	}
@@ -175,10 +209,12 @@ void timerfunc(uint32_t  timersrc) {
 		userlog("countdown: %d\n", delayed_counter);
 #endif		
 	} else {
+		/*
 		if ( system_start_timer != NULL ) {
 			xTimerStop( system_start_timer, 0 );
 			system_start_timer = NULL;
 		} 
+		*/
 	}	
 	pauseTask(1000);
 }
@@ -189,11 +225,12 @@ void vSystemStartTimerCallback( TimerHandle_t xTimer ){
 #endif	
 	xTaskCreate(read_electro_task, "read_electro_task", 2048, NULL, 5, NULL); 
 
-#ifdef MQTT
+#ifdef MQTTD
  	//mqtt_client = (MQTT_Client*) &mqttClient;  // for non os sdk
-	mqtt_send_timer = xTimerCreate("mqtt send timer", pdMS_TO_TICKS( mqtt_send_interval ), pdTRUE, 0, vMqttSendTimerCallback);
+	mqtt_send_timer = xTimerCreate("mqtt send timer", pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), pdTRUE, 0, vMqttSendTimerCallback);
 	xTimerStart( mqtt_send_timer, 0);
 #endif
+
 }
 
 void pzem_send (uint8_t *addr, uint8_t cmd) {
@@ -297,7 +334,7 @@ void read_electro_task( void * pvParameters ){
 			vTaskDelete(NULL);
 			return;
 		}
-		
+		//userlog("%s\n", __func__);
 		for ( uint8_t i=1;i<=120;i++) {
 			int m = i % 4;
 			if ( i == 120 ) {
@@ -341,11 +378,12 @@ uint8_t read_buffer(uint8_t *buffer, uint8_t cnt){
 }
 
 
-#ifdef MQTT
+#ifdef MQTTD
 void vMqttSendTimerCallback( TimerHandle_t xTimer ) {
+	//userlog("%s\n", __func__);
+	if ( sensors_param.mqtten != 1 ) return;
 
-	if ( !sensors_param.mqtten ) return;
-
+//userlog("enabled send mqtt\n");
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d.%d", (int)voltage, 		(int)(voltage*10) % 10);
 	MQTT_Publish(client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
@@ -365,9 +403,9 @@ void vMqttSendTimerCallback( TimerHandle_t xTimer ) {
 	os_sprintf(payload,"%d", (int)energy);
 	MQTT_Publish(client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	pauseTask(20);
-	
 }	
 #endif
+
 
 void show_countdown(uint8_t cnt) {
 	if ( cnt > 0 ) {
@@ -382,5 +420,4 @@ void webfunc(char *pbuf) {
 	os_sprintf(HTTPBUFF,"<br><b>Мощность:</b> %d Вт", 	(int)power);
 	os_sprintf(HTTPBUFF,"<br><b>Расход:</b> %d.%d Вт*ч", 	(int)energy, 		(int)(energy*100) % 100);
 	os_sprintf(HTTPBUFF,"<br><b>Версия:</b> %s", FW_VER);
-	
 }
