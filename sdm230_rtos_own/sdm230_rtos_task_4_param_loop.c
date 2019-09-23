@@ -14,7 +14,7 @@
 #define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "1.4"
+#define FW_VER_NUM "1.5"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM  ".1 debug"
@@ -420,18 +420,11 @@ void read_energy_resettable(){
 	pauseTask( SDM_PAUSE_TASK );
 }
 
-void read_electro_task( void * pvParameters ){
-	for(;;){
-		if ( !sdm_enabled ) { 
-			vTaskDelete(NULL);
-			return;
-		}
-		
+void read_electro_params_c3_v1_c3_p1__e120() {
 		for ( uint8_t i=1;i<=120;i++) {
 			int m = i % 4;
 			if ( i == 120 ) {
 				read_energy();
-				pauseTask( SDM_PAUSE_TASK );
 				read_energy_resettable();
 				continue;
 			}
@@ -448,6 +441,33 @@ void read_electro_task( void * pvParameters ){
 				}				
 			}			
 		}
+}
+
+void read_electro_params_c20vp__er_10sec() {
+	// c20vp - ток 20 раз подряд, 1 раз, 1 раз
+	// er_60sec - расход 1 раз в 10 сек
+		static uint32_t ts;
+		
+		for ( uint8_t i=1;i<21;i++) read_current();
+		read_voltage();
+		read_power();
+
+		if ( millis() - ts> 10 * 1000 ) {
+			read_energy();
+			read_energy_resettable();
+			ts = millis();
+		}
+}
+
+void read_electro_task( void * pvParameters ){
+	for(;;){
+		if ( !sdm_enabled ) { 
+			vTaskDelete(NULL);
+			return;
+		}
+		
+		//read_electro_params_c3_v1_c3_p1__e120();  // старый алгоритм чтения
+		read_electro_params_c20vp__er_10sec();     //  новый алгоритм чтения
 		pauseTask(SDM_PAUSE_TASK);
 	}
 	vTaskDelete(NULL);
