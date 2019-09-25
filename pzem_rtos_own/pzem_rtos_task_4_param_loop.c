@@ -12,7 +12,7 @@
 #define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "3.7.3"
+#define FW_VER_NUM "3.7.4"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM  " debug"
@@ -286,9 +286,9 @@ void read_current(){
 	float v = pzem_current(pzem_addr);
 
 	#ifdef CUT_OFF_INCORRECT_VALUE
-		current = ( v == 0) ? current : v;
-	#else
 		current = ( v == 0 || v > 100) ? current : v;
+	#else
+		current = ( v == 0) ? current : v;		
 	#endif
 
 #ifdef DEBUG	
@@ -302,9 +302,9 @@ void read_power(){
 	float v = pzem_power(pzem_addr);
 
 	#ifdef CUT_OFF_INCORRECT_VALUE
-		power = ( v == 0) ? power : v;
+		power = ( v == 0 || v > 25000) ? power : v;	
 	#else
-		power = ( v == 0 || v > 25000) ? power : v;
+		power = ( v == 0) ? power : v;
 	#endif
 
 #ifdef DEBUG		
