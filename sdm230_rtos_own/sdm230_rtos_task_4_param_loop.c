@@ -14,7 +14,7 @@
 #define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "1.7"
+#define FW_VER_NUM "1.9"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM  ".1 debug"
@@ -22,7 +22,7 @@
 #define FW_VER FW_VER_NUM
 #endif	
 
-#define DELAYED_START					10   //sec
+#define DELAYED_START					60   //sec
 
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
@@ -143,7 +143,7 @@ static void uart_init() {
     };
 	
     uart_param_config(UART_NUM_0, &uart_config);
-    uart_driver_install(UART_NUM_0, BUF_SIZE * 2, BUF_SIZE * 2, 100, NULL);	
+    uart_driver_install(UART_NUM_0, BUF_SIZE * 2, BUF_SIZE * 2, 100, NULL, 0);	
     
 #ifdef DEBUG	
 	uart_param_config(UART_NUM_1, &uart_config);
@@ -264,7 +264,8 @@ float sdm_read(uint8_t addr, uint8_t fcode) {
 		}
 		#endif
 	}
-	
+	vTaskDelay(100);
+
 	#ifdef DEBUG
 	else {
 		userlog("FAIL: response data invalid \n");
@@ -497,6 +498,7 @@ void send_buffer(const uint8_t *buffer, uint8_t len){
 #endif
 */
 	uart_write_bytes(UART_NUM_0, (const char *) buffer, len);
+	vTaskDelay(10);
 }
 
 uint8_t read_buffer(uint8_t *buffer, uint8_t cnt){
