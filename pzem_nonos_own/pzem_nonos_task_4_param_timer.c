@@ -6,7 +6,7 @@
 	#define MQTTD
 
 	//#define DEBUG
-	#define FW_VER_NUM "1.2"
+	#define FW_VER_NUM "1.3"
 
 
 
@@ -23,6 +23,7 @@
 
 	#define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
+	#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
 	#define PZEM_PAUSE_TASK 	20
 
 	#define CMD_VOLTAGE 		0xB0
@@ -141,10 +142,15 @@ void read_buffer(){
 		if ( RESPONSE_SIZE == i) {
 		
 			// что то прочитали
+			float v;
 			switch ( command ) {
 				case CMD_VOLTAGE:
-					voltage = read_voltage(rx_buf, i);
-
+					v = read_voltage(rx_buf, i);
+					#ifdef CUT_OFF_INCORRECT_VALUE
+						voltage = ( v == 0 || v > 400) ? voltage : v;
+					#else
+						voltage = ( v == 0 ) ? voltage : v;
+					#endif
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
 						os_sprintf(logstr, "[%d] voltage: %d.%d \n", millis(), (int)voltage, 		(int)(voltage*10) % 10);
@@ -153,8 +159,12 @@ void read_buffer(){
 
 					break;
 				case CMD_CURRENT:
-					current = read_current(rx_buf, i);
-
+					v = read_current(rx_buf, i);
+					#ifdef CUT_OFF_INCORRECT_VALUE
+						current = ( v == 0 || v > 100) ? current : v;
+					#else
+						current = ( v == 0) ? current : v;		
+					#endif
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
 						os_sprintf(logstr, "[%d] current: %d.%d \n", millis(), (int)current, 		(int)(current*100) % 100);
@@ -163,8 +173,12 @@ void read_buffer(){
 
 					break;
 				case CMD_POWER:
-					power = read_power(rx_buf, i);
-					
+					v = read_power(rx_buf, i);
+					#ifdef CUT_OFF_INCORRECT_VALUE
+						power = ( v == 0 || v > 25000) ? power : v;	
+					#else
+						power = ( v == 0) ? power : v;
+					#endif					
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
 						os_sprintf(logstr, "[%d] power: %d \n", millis(), (int)power);
@@ -173,8 +187,8 @@ void read_buffer(){
 
 					break;
 				case CMD_ENERGY:
-					energy = read_energy(rx_buf, i);
-
+					v = read_energy(rx_buf, i);
+					energy = ( v == 0) ? energy : v;
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
 						os_sprintf(logstr, "[%d] energy: %d.%d \n", millis(), (int)energy, 		(int)(energy*100) % 100);
