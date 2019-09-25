@@ -14,7 +14,7 @@
 #define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "1.5"
+#define FW_VER_NUM "1.7"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM  ".1 debug"
@@ -26,6 +26,7 @@
 
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
+#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
 #define UART_BUFFER_RAED_DELAY 	30
 #define SDM_PAUSE_TASK 	50
 
@@ -173,9 +174,6 @@ void startfunc(){
 	get_config_values(0);
 	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
-	//os_timer_disarm(&system_start_timer);
-	//os_timer_setfn(&system_start_timer, (os_timer_func_t *)vSystemStartTimerCallback, NULL);
-	//os_timer_arm(&system_start_timer, DELAYED_START * 1000, 0);
 
 #ifdef DEBUG	
 	if ( system_start_timer == NULL ) {
@@ -198,23 +196,8 @@ BaseType_t b = xTimerStart( system_start_timer, 0);
 
 void timerfunc(uint32_t  timersrc) {
 	// выполнение кода каждую 1 секунду
-	//userlog("%s\n", __func__);
-	/*
-	if ( xTimerIsTimerActive(system_start_timer) != pdFALSE ) {
-		userlog("PASS: Timer system_start_timer is active\n");
-	} else {
-		userlog("FAIL: timer system_start_timer is not active\n");
-	}
-	*/
-	//if ( get_config_values(1) == 1 ) {
-		// reinit
-/*		
-#ifdef MQTTD		
-		//if ( mqtt_send_timer != NULL && ( xTimerIsTimerActive(mqtt_send_timer) != pdFALSE )) 
-		//	xTimerChangePeriod(mqtt_send_timer, pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), 100);
-#endif		
-*/
-	//}
+	get_config_values(1);
+
 	if(timersrc%30==0){
 		// выполнение кода каждые 30 секунд
 	}
@@ -224,14 +207,7 @@ void timerfunc(uint32_t  timersrc) {
 #ifdef DEBUG		
 		userlog("countdown: %d\n", delayed_counter);
 #endif		
-	} else {
-		/*
-		if ( system_start_timer != NULL ) {
-			xTimerStop( system_start_timer, 0 );
-			system_start_timer = NULL;
-		} 
-		*/
-	}	
+	}
 	pauseTask(1000);
 }
 
@@ -242,7 +218,6 @@ void vSystemStartTimerCallback( TimerHandle_t xTimer ){
 	xTaskCreate(read_electro_task, "read_electro_task", 2048, NULL, 5, NULL); 
 
 #ifdef MQTTD
- 	//mqtt_client = (MQTT_Client*) &mqttClient;  // for non os sdk
 	mqtt_send_timer = xTimerCreate("mqtt send timer", pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), pdTRUE, 0, vMqttSendTimerCallback);
 	xTimerStart( mqtt_send_timer, 0);
 #endif
@@ -392,31 +367,54 @@ float sdm_energy_resettable(uint8_t addr) {
 
 void read_voltage(){
 	if ( !sdm_enabled ) return;	
-	voltage = sdm_voltage(SDM_ADDR);
+	float v = sdm_voltage(SDM_ADDR);
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		voltage = ( v == 0 || v > 400) ? voltage : v;
+	#else
+		voltage = ( v == 0 ) ? voltage : v;
+	#endif	
 	pauseTask(SDM_PAUSE_TASK );
 }
 
 void read_current(){
 	if ( !sdm_enabled ) return;
-	current = sdm_current(SDM_ADDR);
+	float v = sdm_current(SDM_ADDR);
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		current = ( v == 0 || v > 100) ? current : v;
+	#else
+		current = ( v == 0) ? current : v;
+	#endif	
 	pauseTask( SDM_PAUSE_TASK );
 }
 
 void read_power(){
 	if ( !sdm_enabled ) return;
-	power = sdm_power(SDM_ADDR);
+	float v = sdm_power(SDM_ADDR);
+
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		power = ( v == 0 || v > 25000) ? power : v;
+	#else	
+		power = ( v == 0) ? power : v;
+	#endif
+
 	pauseTask( SDM_PAUSE_TASK );
 }
 
 void read_energy(){
 	if ( !sdm_enabled ) return;
-	energy = sdm_energy(SDM_ADDR);
+	float v  = sdm_energy(SDM_ADDR);
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		energy = ( v == 0) ? energy : v;
+	#endif	
 	pauseTask( SDM_PAUSE_TASK );
 }
 
 void read_energy_resettable(){
 	if ( !sdm_enabled ) return;
-	energy_resettable = sdm_energy_resettable(SDM_ADDR);
+	float v = sdm_energy_resettable(SDM_ADDR);
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		energy_resettable = ( v == 0) ? energy_resettable : v;
+	#endif		
 	pauseTask( SDM_PAUSE_TASK );
 }
 
