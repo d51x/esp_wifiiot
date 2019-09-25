@@ -12,7 +12,7 @@
 #define MQTTD
 
 //#define DEBUG
-#define FW_VER_NUM "3.7.2"
+#define FW_VER_NUM "3.7.3"
 
 #ifdef DEBUG
 #define FW_VER FW_VER_NUM  " debug"
@@ -20,11 +20,11 @@
 #define FW_VER FW_VER_NUM
 #endif	
 
-#define DELAYED_START					10   //sec
+#define DELAYED_START					60   //sec
 
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
-
+#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
 #define PZEM_PAUSE_TASK 	20
 
 #define CMD_VOLTAGE 		0xB0
@@ -63,7 +63,6 @@ typedef struct PZEMCommand {
 	#define POWER_MQTT_TOPIC_PARAM		"pmw"
 	#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
 	#define MQTT_PAYLOAD_BUF 20
-	//MQTT_Client* mqtt_client;    //for non os sdk
 	char payload[MQTT_PAYLOAD_BUF];
 	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
 
@@ -80,7 +79,6 @@ float energy = 0;
 uint8_t delayed_counter = DELAYED_START;
 
 static TimerHandle_t system_start_timer;
-//static volatile os_timer_t system_start_timer; 
 void vSystemStartTimerCallback( TimerHandle_t xTimer );
 
 // uart0
@@ -139,12 +137,12 @@ uint8_t get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 -
 	uint8_t reinit = 0;
 	//reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
 	pzem_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные pzem
-/*
+
 #ifdef MQTTD	
-	reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
+	//reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
 	mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
 #endif	
-*/
+
 	return reinit;
 }
 
@@ -157,9 +155,6 @@ void startfunc(){
 	get_config_values(0);
 	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
-	//os_timer_disarm(&system_start_timer);
-	//os_timer_setfn(&system_start_timer, (os_timer_func_t *)vSystemStartTimerCallback, NULL);
-	//os_timer_arm(&system_start_timer, DELAYED_START * 1000, 0);
 
 #ifdef DEBUG	
 	if ( system_start_timer == NULL ) {
@@ -182,23 +177,8 @@ BaseType_t b = xTimerStart( system_start_timer, 0);
 
 void timerfunc(uint32_t  timersrc) {
 	// выполнение кода каждую 1 секунду
-	//userlog("%s\n", __func__);
-	/*
-	if ( xTimerIsTimerActive(system_start_timer) != pdFALSE ) {
-		userlog("PASS: Timer system_start_timer is active\n");
-	} else {
-		userlog("FAIL: timer system_start_timer is not active\n");
-	}
-	*/
-	//if ( get_config_values(1) == 1 ) {
-		// reinit
-/*		
-#ifdef MQTTD		
-		//if ( mqtt_send_timer != NULL && ( xTimerIsTimerActive(mqtt_send_timer) != pdFALSE )) 
-		//	xTimerChangePeriod(mqtt_send_timer, pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), 100);
-#endif		
-*/
-	//}
+	get_config_values(1);
+
 	if(timersrc%30==0){
 		// выполнение кода каждые 30 секунд
 	}
@@ -208,14 +188,8 @@ void timerfunc(uint32_t  timersrc) {
 #ifdef DEBUG		
 		userlog("countdown: %d\n", delayed_counter);
 #endif		
-	} else {
-		/*
-		if ( system_start_timer != NULL ) {
-			xTimerStop( system_start_timer, 0 );
-			system_start_timer = NULL;
-		} 
-		*/
-	}	
+	}
+
 	pauseTask(1000);
 }
 
@@ -226,7 +200,6 @@ void vSystemStartTimerCallback( TimerHandle_t xTimer ){
 	xTaskCreate(read_electro_task, "read_electro_task", 2048, NULL, 5, NULL); 
 
 #ifdef MQTTD
- 	//mqtt_client = (MQTT_Client*) &mqttClient;  // for non os sdk
 	mqtt_send_timer = xTimerCreate("mqtt send timer", pdMS_TO_TICKS( mqtt_send_interval_sec * 1000 ), pdTRUE, 0, vMqttSendTimerCallback);
 	xTimerStart( mqtt_send_timer, 0);
 #endif
@@ -294,7 +267,14 @@ float pzem_energy(uint8_t *addr) {
 
 void read_voltage(){
 	if ( !pzem_enabled ) return;	
-	voltage = pzem_voltage(pzem_addr);
+	float v = pzem_voltage(pzem_addr);
+
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		voltage = ( v == 0 || v > 400) ? voltage : v;
+	#else
+		voltage = ( v == 0 ) ? voltage : v;
+	#endif
+
 #ifdef DEBUG
 	if ( voltage >= 0) userlog("%d \t\t voltage: %d.%d V\n", millis(), (int)voltage,  ( (int) (voltage*10) % 10));		
 #endif	
@@ -303,7 +283,14 @@ void read_voltage(){
 
 void read_current(){
 	if ( !pzem_enabled ) return;
-	current = pzem_current(pzem_addr);
+	float v = pzem_current(pzem_addr);
+
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		current = ( v == 0) ? current : v;
+	#else
+		current = ( v == 0 || v > 100) ? current : v;
+	#endif
+
 #ifdef DEBUG	
 	if ( current >= 0) userlog("%d \t\t current: %d.%d A\n", millis(), (int)current,  ( (int) (current*100) % 100));		
 #endif	
@@ -312,7 +299,14 @@ void read_current(){
 
 void read_power(){
 	if ( !pzem_enabled ) return;
-	power = pzem_power(pzem_addr);
+	float v = pzem_power(pzem_addr);
+
+	#ifdef CUT_OFF_INCORRECT_VALUE
+		power = ( v == 0) ? power : v;
+	#else
+		power = ( v == 0 || v > 25000) ? power : v;
+	#endif
+
 #ifdef DEBUG		
 	if ( power >= 0) userlog("%d \t\t power: %d.%d\ Wh\n", millis(), (int)power,  ( (int) (power*100) % 100));		
 #endif		
@@ -321,7 +315,8 @@ void read_power(){
 
 void read_energy(){
 	if ( !pzem_enabled ) return;
-	energy = pzem_energy(pzem_addr);
+	float v = pzem_energy(pzem_addr);	
+	energy = ( v == 0) ? energy : v;
 #ifdef DEBUG		
 	if ( energy >= 0) userlog("%d \t\t energy: %d.%d Wt*h\n", millis(), (int)energy,  ( (int) (energy*100) % 100));		
 #endif
