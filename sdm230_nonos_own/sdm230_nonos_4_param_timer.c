@@ -5,26 +5,28 @@
 
 	#define MQTTD
 
-	#define DEBUG
-	#define FW_VER_NUM "1.0"
+	//#define DEBUG
+	#define FW_VER_NUM "1.3"
 
 
+	#define ELECTRO_C20_V1_P1__E10
 
 	#define millis() (uint32_t) (micros() / 1000ULL) 
 
 	#ifdef DEBUG
 	static char logstr[100];
-	#define FW_VER FW_VER_NUM  ".0 debug"
+	#define FW_VER FW_VER_NUM  ".2 debug"
 	#else
 	#define FW_VER FW_VER_NUM
 	#endif	
 
-	#define DELAYED_START					10   //sec
+	#define DELAYED_START					60   //sec
 
 	#define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
 	#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
-	#define SDM_PAUSE_TASK 	20
+	#define SDM_PAUSE_TASK 	50
+	#define MQTT_PAUSE_TASK 	50
 
 	#define SDM_ADDR					0x0001
 
@@ -76,7 +78,8 @@
 
 
 	uint8_t sdm_enabled = 0;
-	uint16_t command = SDM_NO_COMMAND;
+	uint8_t sdm_task_delay = SDM_PAUSE_TASK;
+	uint32_t command = SDM_NO_COMMAND;
 	float voltage = 0;
 	float current = 0;
 	float power = 0;
@@ -218,17 +221,22 @@ void read_buffer(){
 uint8_t get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
 	uint8_t reinit = 0;
 	//reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
-	sdm_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные pzem
+	sdm_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные sdm
+
+	sdm_task_delay = (sensors_param.cfgdes[1] > 0) ? sensors_param.cfgdes[1] : SDM_PAUSE_TASK; 
 
 #ifdef MQTTD	
 	//reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
-	mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
+	mqtt_send_interval_sec = (sensors_param.cfgdes[2] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[2];		
 #endif	
 
 	return reinit;
 }
 
 void ICACHE_FLASH_ATTR startfunc(){
+
+
+
 	// выполняется один раз при старте модуля.
 	uart_init(BIT_RATE_9600);	  
 	ETS_UART_INTR_ATTACH(read_buffer, NULL);
@@ -242,6 +250,13 @@ void ICACHE_FLASH_ATTR startfunc(){
 	
 	get_config_values(0);
 
+
+	#ifdef DEBUG
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "Start module \n");
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
+
 	// запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	os_timer_disarm(&system_start_timer);
 	os_timer_setfn(&system_start_timer, (os_timer_func_t *)system_start_cb, NULL);
@@ -253,22 +268,38 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		// выполнение кода каждые 30 секунд
 	}
 		
+	get_config_values(0);
+
 	if ( delayed_counter > 0 ) { 
+
+	#ifdef DEBUG
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "countdown: %d \n", delayed_counter);
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
+
 		delayed_counter--;	
 	}	
 }
 
 void system_start_cb( ){
+
+	#ifdef DEBUG
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "[%d] %s \n", millis(), __func__);
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
+
 	os_timer_disarm(&read_electro_timer);
 	os_timer_setfn(&read_electro_timer, (os_timer_func_t *)read_electro_cb, NULL);
-	os_timer_arm(&read_electro_timer, 20, 0); // будет рестартовать сам себя
+	os_timer_arm(&read_electro_timer, sdm_task_delay, 0); // будет рестартовать сам себя
 
 	mqtt_client = (MQTT_Client*) &mqttClient;
 	os_timer_disarm(&mqtt_send_timer);
 	os_timer_setfn(&mqtt_send_timer, (os_timer_func_t *)mqtt_send_cb, NULL);
 	os_timer_arm(&mqtt_send_timer, mqtt_send_interval_sec * 1000, 1);
 
-	command = 0;
+	command = SDM_NO_COMMAND;
 }
 
 void sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
@@ -284,6 +315,24 @@ void sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
 	uint16_t crc = sdm_crc(bytes, sizeof(sdm) - 2 );	
 	sdm.crc[0] = low_byte(crc);
 	sdm.crc[1] = high_byte(crc);
+
+	#ifdef DEBUG1
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "[%d] %s: ", millis(), __func__);
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
+
+	#ifdef DEBUG1
+		uint8_t k;
+		for (k=0;k<sizeof(sdm);k++) {
+			os_bzero(logstr, 100);
+			os_sprintf(logstr, "%02X ", bytes[k]);
+			uart1_tx_buffer(logstr, os_strlen(logstr));
+		}
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "\n");
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
 
 	send_buffer(bytes, sizeof(sdm));
 	os_delay_us(20);
@@ -374,7 +423,8 @@ void read_electro_params_c3_v1_c3_p1__e120(uint8_t counter) {
 void read_electro_params_c20vp__er_10sec(uint8_t counter) {
 	// c20vp - ток 20 раз подряд, 1 раз, 1 раз
 	// er_60sec - расход 1 раз в 10 сек
-	static uint32_t ts, ts2;
+	static uint32_t ts = 0;
+	static uint32_t ts2 = 0;
 
 	if ( millis() - ts> 10 * 1000 ) {  // раз в 10 сек
 		command = SDM_ENERGY;
@@ -386,7 +436,7 @@ void read_electro_params_c20vp__er_10sec(uint8_t counter) {
 		ts2 = millis();
 	} else if ( counter < 21 ) {
 		command = SDM_CURRENT;
-		request_power(SDM_ADDR);
+		request_current(SDM_ADDR);
 	} else if ( counter == 21 ) {
 		command = SDM_VOLTAGE;
 		request_voltage(SDM_ADDR);		
@@ -397,21 +447,32 @@ void read_electro_params_c20vp__er_10sec(uint8_t counter) {
 }
 
 void read_electro_cb(){
-	static uint8_t el_cnt = 1;
+
+	#ifdef DEBUG1
+		os_bzero(logstr, 100);
+		os_sprintf(logstr, "[%d] %s: sdm_enabled: %d   command: %04X \n", millis(), __func__, sdm_enabled, command);
+		uart1_tx_buffer(logstr, os_strlen(logstr));
+	#endif
+
+	static uint8_t el_cnt = 0;
 	if ( sdm_enabled && command == SDM_NO_COMMAND) {	
 		// можно писать в uart
-		read_electro_params_c3_v1_c3_p1__e120(el_cnt);
-
-		os_delay_us(100);	
-		system_soft_wdt_feed();
-
 		el_cnt++;  // увеличим счетчик
-		//if ( el_cnt > 120 ) el_cnt = 1; //read_electro_params_c3_v1_c3_p1__e120
-		if ( el_cnt > 22 ) el_cnt = 1; //read_electro_params_c20vp__er_10sec
+
+		#ifdef ELECTRO_C20_V1_P1__E10
+			if ( el_cnt > 22 ) el_cnt = 1;		
+			read_electro_params_c20vp__er_10sec(el_cnt);
+		#else
+			if ( el_cnt > 120 ) el_cnt = 1;
+			read_electro_params_c3_v1_c3_p1__e120(el_cnt);
+		#endif
+
+		os_delay_us(500);	
+		system_soft_wdt_feed();
 	}
 	os_timer_disarm(&read_electro_timer);
 	os_timer_setfn(&read_electro_timer, (os_timer_func_t *)read_electro_cb, NULL);
-	os_timer_arm(&read_electro_timer, 10, 0);		
+	os_timer_arm(&read_electro_timer, sdm_task_delay, 0);		
 }
 
 #ifdef MQTTD
@@ -421,9 +482,9 @@ void mqtt_send_cb() {
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d.%d", (int)voltage, 		(int)(voltage*10) % 10);
 	MQTT_Publish(mqtt_client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(SDM_PAUSE_TASK);
+	os_delay_us(20);
 
-	#ifdef DEBUG
+	#ifdef DEBUG1
 		os_bzero(logstr, 100);
 		os_sprintf(logstr, "[%d] mqtt: %s:   %s \n", millis(), VOLTAGE_MQTT_TOPIC_PARAM, payload);
 		uart1_tx_buffer(logstr, os_strlen(logstr));
@@ -432,9 +493,9 @@ void mqtt_send_cb() {
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d.%d", (int)current, 		(int)(current*100) % 100);
 	MQTT_Publish(mqtt_client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(SDM_PAUSE_TASK);
+	os_delay_us(20);
 
-	#ifdef DEBUG
+	#ifdef DEBUG1
 		os_bzero(logstr, 100);
 		os_sprintf(logstr, "[%d] mqtt: %s:   %s \n", millis(), CURRENT_MQTT_TOPIC_PARAM, payload);
 		uart1_tx_buffer(logstr, os_strlen(logstr));
@@ -443,9 +504,9 @@ void mqtt_send_cb() {
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d", (int)power);
 	MQTT_Publish(mqtt_client, POWER_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(SDM_PAUSE_TASK);
+	os_delay_us(20);
 
-	#ifdef DEBUG
+	#ifdef DEBUG1
 		os_bzero(logstr, 100);
 		os_sprintf(logstr, "[%d] mqtt: %s:   %s \n", millis(), POWER_MQTT_TOPIC_PARAM, payload);
 		uart1_tx_buffer(logstr, os_strlen(logstr));
@@ -454,9 +515,9 @@ void mqtt_send_cb() {
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d", (int)energy);
 	MQTT_Publish(mqtt_client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(SDM_PAUSE_TASK);
+	os_delay_us(20);
 
-	#ifdef DEBUG
+	#ifdef DEBUG1
 		os_bzero(logstr, 100);
 		os_sprintf(logstr, "[%d] mqtt: %s:   %s \n", millis(), ENERGY_MQTT_TOPIC_PARAM, payload);
 		uart1_tx_buffer(logstr, os_strlen(logstr));
