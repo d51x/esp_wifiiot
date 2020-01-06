@@ -21,7 +21,8 @@
     cfgdes[1] - fade_out_delay - через сколько погасить ленту (задержка выключения), если с датчика движения пришел сигнал на выключение
     cfgdes[2] - auto_mode -  авто режим по датчику движения
 */
-#define FW_VER "4.28"
+
+#define FW_VER "4.29"
 
 uint8_t mm = 0;
     // row 1
@@ -299,17 +300,10 @@ void ICACHE_FLASH_ATTR power_off_all() {
     GPIO_ALL(GPIO_FAN, 0);
     // TODO: плавно выключать с текущего уровня яркости !!!!
     analogWrite(PWM_LED_White, 0);
-    os_delay_us(100);
     analogWrite(PWM_LED_RED, 0);
-    os_delay_us(100);
     analogWrite(PWM_LED_GREEN, 0);
-    os_delay_us(100);
     analogWrite(PWM_LED_BLUE, 0);
-    os_delay_us(100);
     analogWrite(PWM_LED_WWHITE, 0);
-    os_delay_us(100);
-
-
 }
 
 void ICACHE_FLASH_ATTR read_ir_cb() {
@@ -521,12 +515,16 @@ void ICACHE_FLASH_ATTR set_color(uint8_t r, uint8_t g, uint8_t b, uint8_t reset)
         stop_color_effect();
     }
     
-    analogWrite(PWM_LED_RED,    r);
-    os_delay_us(100);
-    analogWrite(PWM_LED_GREEN,  g);
-    os_delay_us(100);
-    analogWrite(PWM_LED_BLUE,   b);
-    os_delay_us(100);
+    pwm_set_duty_iot(r, PWM_LED_RED);
+    //analogWrite(PWM_LED_RED,    r);
+    //os_delay_us(100);
+    //analogWrite(PWM_LED_GREEN,  g);
+    pwm_set_duty_iot(g, PWM_LED_GREEN);
+    //os_delay_us(100);
+    //analogWrite(PWM_LED_BLUE,   b);
+    //os_delay_us(100);
+    pwm_set_duty_iot(b, PWM_LED_BLUE);
+    pwm_start_iot();
 }
 
 void ICACHE_FLASH_ATTR stop_color_effect() {
@@ -548,12 +546,15 @@ void ICACHE_FLASH_ATTR set_color_effect__jump3_cb() {
         case 2: b=255; break;
     }
 
-    analogWrite(PWM_LED_RED,    r);
-    os_delay_us(100);
-    analogWrite(PWM_LED_GREEN,  g);
-    os_delay_us(100);
-    analogWrite(PWM_LED_BLUE,   b);
-    os_delay_us(100);
+    //analogWrite(PWM_LED_RED,    r);
+    pwm_set_duty_iot(r, PWM_LED_RED);
+    //analogWrite(PWM_LED_GREEN,  g);
+    pwm_set_duty_iot(g, PWM_LED_GREEN);
+    //os_delay_us(100);
+    //analogWrite(PWM_LED_BLUE,   b);
+    pwm_set_duty_iot(b, PWM_LED_BLUE);
+    //os_delay_us(100);
+    pwm_start_iot();
 
     //set_color(rgb->r, rgb->g, rgb->b, 0);
     mm++;
@@ -604,9 +605,9 @@ void ICACHE_FLASH_ATTR set_color_effect__fade1() {
 }
 
 void ICACHE_FLASH_ATTR set_color_effect__wheel(uint16_t start){
-    static uint16_t i = 360; // 360
+    static uint16_t i = 0; // 360
     i = start;
-    static uint8_t direction = 0;
+    static uint8_t direction = 1;
 	hsv.h = i;
     hsv.s = 255; // get from global var
     hsv.v = color_brightness; // get from global var
@@ -649,7 +650,7 @@ void ICACHE_FLASH_ATTR set_color_effect(color_effect_t effect){
             set_color_effect__jump7(0);    
             break;
         case WHEEL:
-            set_color_effect__wheel(360);
+            set_color_effect__wheel(0);
             break;
         default:
             //stop color effect
