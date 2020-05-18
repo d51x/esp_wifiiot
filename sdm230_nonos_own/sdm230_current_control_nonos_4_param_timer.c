@@ -1,4 +1,4 @@
-	//#include "driver/uart.h"
+//#include "driver/uart.h"
 	#include "../moduls/uart_register.h"
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c" // ??????
@@ -9,7 +9,7 @@
 	#define FW_VER_NUM "2.3"
 	#ifdef DEBUG
 	static char logstr[100];
-	#define FW_VER FW_VER_NUM  ".38 debug"
+	#define FW_VER FW_VER_NUM  ".42 debug"
 	#else
 	#define FW_VER FW_VER_NUM
 	#endif	
@@ -268,7 +268,7 @@ void read_buffer(){
 					energy = ( v == 0) ? energy : v;
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
-						os_sprintf(logstr, "[%d] energy: %d.%d \n", millis(), (int)energy, 		(int)(energy*100) % 100);
+						os_sprintf(logstr, "[%d] energy: %d.%d \n", millis(), (uint32_t)energy, 		(uint32_t)(energy*100) % 100);
 						uart1_tx_buffer(logstr, os_strlen(logstr));
 					#endif
 
@@ -277,7 +277,7 @@ void read_buffer(){
 					energy_resettable = ( v == 0) ? energy_resettable : v;
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
-						os_sprintf(logstr, "[%d] energy_resettable: %d.%d \n", millis(), (int)energy_resettable, 		(int)(energy_resettable*100) % 100);
+						os_sprintf(logstr, "[%d] energy_resettable: %d.%d \n", millis(), (uint32_t)energy_resettable, 		(uint32_t)(energy_resettable*100) % 100);
 						uart1_tx_buffer(logstr, os_strlen(logstr));
 					#endif
 					break;					
@@ -659,7 +659,7 @@ void mqtt_send_cb() {
 	#endif
 
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d.%d", (int)current, 		(int)(current*100) % 100);
+	os_sprintf(payload,"%d.%d", (uint16_t)current, 		(uint16_t)(current*100) % 100);
 	MQTT_Publish(mqtt_client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	os_delay_us(20);
 
@@ -681,7 +681,8 @@ void mqtt_send_cb() {
 	#endif
 
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", (int)energy);
+	//os_sprintf(payload,"%d", (int)energy);
+	os_sprintf(payload,"%d.%d", (uint32_t)energy, 		(uint32_t)(energy*100) % 100);
 	MQTT_Publish(mqtt_client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
 	os_delay_us(20);
 
@@ -852,8 +853,8 @@ void webfunc(char *pbuf) {
 							"<td><b>Мощность: </b>%d <small>Вт</small></td>"
 							"</tr>"
 						  "</table>", 
-						  (uint8_t)voltage, 		
-						  (uint8_t)current, 		(uint8_t)(current*100) % 100,
+						  (int)voltage, 		
+						  (uint16_t)current, 		(uint16_t)(current*100) % 100,
 						  (uint16_t)power
 				);
 	
@@ -864,8 +865,8 @@ void webfunc(char *pbuf) {
 							"<td><b>обнуляемый: </b>%d.%d <small>кВт*ч</small></td>"
 							"</tr>"
 						  "</table>", 
-						  (uint32_t)energy, 		(uint8_t)(energy*100) % 100,
-						  (uint32_t)energy_resettable, 		(uint8_t)(energy_resettable*100) % 100
+						  (uint32_t)energy, 		(uint32_t)(energy*100) % 100,
+						  (uint32_t)energy_resettable, 		(uint32_t)(energy_resettable*100) % 100
 				);
 
 	
