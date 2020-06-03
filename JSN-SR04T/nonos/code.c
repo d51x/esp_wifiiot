@@ -4,7 +4,7 @@
 
 #define DEBUG
 
-#define FW_VER "1.1"
+#define FW_VER "1.3"
 
 #define DELAYED_START					60   //sec
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
@@ -19,18 +19,39 @@
 	static char logstr[100];
 #endif
 
+#if mqtte || mqttjsone
+	#define MQTT_SEND_INTERVAL 10 // sec
+	#define MQTT_TOPIC_DISTANCE	"distance"
+	#define MQTT_PAYLOAD_BUF 20
+	MQTT_Client* mqtt_client;    //for non os sdk
+	char payload[MQTT_PAYLOAD_BUF];
+	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
+
+	static volatile os_timer_t mqtt_send_timer;	
+	void mqtt_send_cb();
+#endif
+
+
 uint8_t delayed_counter = DELAYED_START;
-static volatile os_timer_t read_sonar_timer;
-static volatile os_timer_t system_start_timer;
+
 	
 volatile uint8_t uart_ready = 1;
-uint16_t distance = 0;
+uint8_t swap_uart = 0;
 
-void system_start_cb( );
-void read_sonar_cb();	
+uint32_t distance = 0;
+uint8_t sonar_enabled = 0;
+uint16_t sonar_read_delay = SONAR_READ_DELAY;
+uint8_t mm_cm = 0; // 0 - mm, 1 - cm
 
-void send_buffer(uint8_t *buffer, uint8_t len);
+static volatile os_timer_t read_sonar_timer;
+static volatile os_timer_t system_start_timer;
+
+void ICACHE_FLASH_ATTR system_start_cb( );
+void ICACHE_FLASH_ATTR read_sonar_cb();	
+
+void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len);
 void read_buffer();
+
 
 
 // UART1 TX GPIO2 Enable output debug
@@ -50,8 +71,7 @@ void ICACHE_FLASH_ATTR uart1_tx_buffer(uint8_t *buffer, uint8_t sz) {
 }
 #endif
 
-
-void send_buffer(uint8_t *buffer, uint8_t len){
+void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len){
 	uart0_tx_buffer(buffer, len);
 }
 
@@ -60,7 +80,7 @@ void read_buffer(){
 	static uint8_t len = 0;
 
 	uint32_t ts = micros();
-	
+		
 	WRITE_PERI_REG(UART_INT_CLR(UART0),UART_RXFIFO_FULL_INT_CLR);
 	while ( READ_PERI_REG(UART_STATUS(UART0)) & (UART_RXFIFO_CNT << UART_RXFIFO_CNT_S) 
 			&& ( micros() - ts < UART_READ_TIMEOUT*1000)) 
@@ -83,7 +103,7 @@ void read_buffer(){
 			// validate
 			#ifdef DEBUG
 				os_bzero(logstr, 100);
-				os_sprintf(logstr, "\n response OK \n ");
+				os_sprintf(logstr, "\n response OK");
 				uart1_tx_buffer(logstr, os_strlen(logstr));
 			#endif
 		
@@ -93,23 +113,23 @@ void read_buffer(){
 				uint16_t crc = (rx_buf[0] + rx_buf[1] + rx_buf[2]) & 0xFF;
 				if ( crc == rx_buf[3] ) {
 					distance = ( (rx_buf[1] << 8 ) + rx_buf[2]);
-					
+					valdes[0] = distance;
 					#ifdef DEBUG
 					os_bzero(logstr, 100);
-					os_sprintf(logstr, "\n distance: %d \n ", distance);
+					os_sprintf(logstr, "\n distance: %d\n", distance);
 					uart1_tx_buffer(logstr, os_strlen(logstr));
 					#endif				
 				} else {
 					#ifdef DEBUG
 						os_bzero(logstr, 100);
-						os_sprintf(logstr, "\n CRC FAIL \n ");
+						os_sprintf(logstr, "\n CRC FAIL\n");
 						uart1_tx_buffer(logstr, os_strlen(logstr));
 					#endif				
 				}
 			} else {
 				#ifdef DEBUG
 					os_bzero(logstr, 100);
-					os_sprintf(logstr, "\n FAILE: incorrect responce \n ");
+					os_sprintf(logstr, "\n FAILE: incorrect responce\n");
 					uart1_tx_buffer(logstr, os_strlen(logstr));
 				#endif
 			}				
@@ -117,12 +137,32 @@ void read_buffer(){
 			uart_ready = 1;			
 			break;			
 		}
+		system_soft_wdt_feed();
 	}				
 }
 
+void get_config_values() {   
+	sonar_enabled = (sensors_param.cfgdes[0]  > 0) ? 1 : 0;  // читать данные sonar
+	sonar_read_delay = (sensors_param.cfgdes[0] < 100) ? SONAR_READ_DELAY : sensors_param.cfgdes[0];	
+
+#if mqtte || mqttjsone	
+	mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
+#endif	
+	mm_cm = (sensors_param.cfgdes[2] > 0) ? 1 : 0;  
+	swap_uart = (sensors_param.cfgdes[3] > 0) ? 1 : 0;  
+}
+
 void ICACHE_FLASH_ATTR startfunc(){
+	
+	get_config_values();
+	
 	// выполняется один раз при старте модуля.
 	uart_init(BIT_RATE_9600);	  
+	
+	if ( swap_uart ) {
+		system_uart_swap();
+	}
+	
 	ETS_UART_INTR_ATTACH(read_buffer, NULL);
 
 	#ifdef DEBUG
@@ -139,6 +179,9 @@ void ICACHE_FLASH_ATTR startfunc(){
 }
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
+	
+	get_config_values();
+	
 	if(timersrc%30==0){
 		// выполнение кода каждые 30 секунд
 	}
@@ -148,19 +191,29 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 	}	
 }
 
-void system_start_cb( ){
+void ICACHE_FLASH_ATTR system_start_cb( ){
 	os_timer_disarm(&read_sonar_timer);
 	os_timer_setfn(&read_sonar_timer, (os_timer_func_t *)read_sonar_cb, NULL);
 	os_timer_arm(&read_sonar_timer, 20, 0); // будет рестартовать сам себя
+	
+#if mqtte || mqttjsone	
+	mqtt_client = (MQTT_Client*) &mqttClient;
+	os_timer_disarm(&mqtt_send_timer);
+	os_timer_setfn(&mqtt_send_timer, (os_timer_func_t *)mqtt_send_cb, NULL);
+	os_timer_arm(&mqtt_send_timer, mqtt_send_interval_sec * 1000, 1);
+#endif
+	
 }
 
-void read_sonar_cb(){
+void ICACHE_FLASH_ATTR read_sonar_cb(){
 	if ( uart_ready ) {
 		// send command into uart
 		uart_ready = 0;
 		distance = 0; // ???? обнулять?
+			
 		uint8_t cmd = COMMAND;
 		send_buffer(&cmd, 1);
+		os_delay_us(50);
 	}
 	
 	os_timer_disarm(&read_sonar_timer);
@@ -169,6 +222,20 @@ void read_sonar_cb(){
 	
 }
 
+#if mqtte || mqttjsone
+void mqtt_send_cb() 
+{
+	if ( sensors_param.mqtten != 1 ) return;
+	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
+	if ( mm_cm ) {
+		os_sprintf(payload,"%d.%d", (uint16_t)distance/10, 		(uint16_t)(distance % 10));
+	} else {
+		os_sprintf(payload,"%d", distance);
+	}
+	MQTT_Publish(mqtt_client, MQTT_TOPIC_DISTANCE, payload, os_strlen(payload), 2, 0, 1);
+	system_soft_wdt_feed();
+}
+#endif
 
 void webfunc(char *pbuf) {
 
@@ -176,6 +243,10 @@ void webfunc(char *pbuf) {
 		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд", delayed_counter);
 	}
 
-	os_sprintf(HTTPBUFF,"<br><b>Расстояние:</b> %d мм", 	distance);
+	if ( mm_cm ) {
+		os_sprintf(HTTPBUFF,"<b>Расcтояние:</b> %d.%d см", 	(uint16_t)distance/10, 		(uint16_t)(distance % 10));
+	} else {
+		os_sprintf(HTTPBUFF,"<b>Расcтояние:</b> %d мм", 	distance);
+	}
 	os_sprintf(HTTPBUFF,"<br><b>Версия:</b> %s", FW_VER);
 }
