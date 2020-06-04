@@ -2,9 +2,9 @@
 #include "../moduls/uart.h"
 #include "../moduls/uart.c" // ??????
 
-#define DEBUG
+//#define DEBUG
 
-#define FW_VER "1.4.1"
+#define FW_VER "1.5"
 
 #define DELAYED_START					60   //sec
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
@@ -22,6 +22,7 @@
 #if mqtte || mqttjsone
 	#define MQTT_SEND_INTERVAL 10 // sec
 	#define MQTT_TOPIC_DISTANCE	"distance"
+	#define MQTT_TOPIC_FAIL	"fail"
 	#define MQTT_PAYLOAD_BUF 20
 	MQTT_Client* mqtt_client;    //for non os sdk
 	//char payload[MQTT_PAYLOAD_BUF];
@@ -40,9 +41,14 @@ uint8_t fail = 1;
 uint8_t swap_uart = 0;
 
 uint32_t distance = 0;
+uint32_t prev_distance = 0;
 uint8_t sonar_enabled = 0;
 uint16_t sonar_read_delay = SONAR_READ_DELAY;
 uint8_t mm_cm = 0; // 0 - mm, 1 - cm
+
+uint32_t distance_min = 200;
+uint32_t distance_max = 4000;
+uint16_t correction = 50;
 
 static volatile os_timer_t read_sonar_timer;
 static volatile os_timer_t system_start_timer;
@@ -54,6 +60,10 @@ void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len);
 void read_buffer();
 
 
+
+uint32_t remap(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
 // UART1 TX GPIO2 Enable output debug
 #ifdef DEBUG
@@ -70,10 +80,94 @@ void ICACHE_FLASH_ATTR uart1_tx_buffer(uint8_t *buffer, uint8_t sz) {
 		WRITE_PERI_REG(UART_FIFO(UART1) , buffer[i]);
 	}
 }
+
+void debug_print_distance() {
+	os_bzero(logstr, 100);
+	os_sprintf(logstr, "distance: %d \t fail: %d \t freemem: %d\n", distance, fail, system_get_free_heap_size());
+	uart1_tx_buffer(logstr, os_strlen(logstr));	
+}
 #endif
+
+
+
 
 void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len){
 	uart0_tx_buffer(buffer, len);
+}
+
+void validate_distance(uint32_t dist)
+{
+	static uint32_t prev = 0;
+	static uint8_t count = 0;
+	static uint32_t sum = 0;
+	static uint32_t min = 0;
+	static uint32_t max = 0;
+	
+
+	
+	if (correction == 0 ) return;
+	
+					
+	if ( count == 0 ) 
+	{
+		min = dist;
+		max = dist;
+		
+		#ifdef DEBUG
+			os_bzero(logstr, 100);
+			os_sprintf(logstr, "start measurments \n");
+			uart1_tx_buffer(logstr, os_strlen(logstr));	
+		#endif	
+	}				
+					
+	if ( count < 10 ) {
+		// накапливаем значения, суммируем
+
+		#ifdef DEBUG
+		
+			os_bzero(logstr, 100);
+			os_sprintf(logstr, "%02d. distance: %d\n", count+1, distance);
+			uart1_tx_buffer(logstr, os_strlen(logstr));		
+		#endif	
+
+			
+		sum += dist;
+		max = ( dist > max ) ? dist : max;
+		min = ( dist < min ) ? dist : min;
+		count++;
+	} else {
+		// count = 10 - накопили 10 показаний
+		uint32_t avg = sum / count; 
+		fail = 0;
+		if ( max - min > correction) 
+		{
+			fail = 1;
+		}			
+
+		
+					#ifdef DEBUG
+						 
+							os_bzero(logstr, 100);
+							os_sprintf(logstr, "end measurments: \n");
+							uart1_tx_buffer(logstr, os_strlen(logstr));	
+							
+
+						os_bzero(logstr, 100);
+						os_sprintf(logstr, "min: %d \t max: %d \t avg: %d \t fail: %d \t \n\n\n", min, max, avg, fail);
+						uart1_tx_buffer(logstr, os_strlen(logstr));	
+					
+					
+					#endif	
+
+							max = 0;
+		min = 1000;
+		count = 0;
+		sum = 0;
+	}
+	
+
+					
+	prev = dist;
 }
 
 void read_buffer(){	
@@ -83,6 +177,7 @@ void read_buffer(){
 	uint32_t ts = micros();
 	
 	WRITE_PERI_REG(UART_INT_CLR(UART0),UART_RXFIFO_FULL_INT_CLR);
+	WRITE_PERI_REG(UART_INT_CLR(UART0),UART_RXFIFO_TOUT_INT_CLR);
 	while ( READ_PERI_REG(UART_STATUS(UART0)) & (UART_RXFIFO_CNT << UART_RXFIFO_CNT_S) 
 			&& ( micros() - ts < UART_READ_TIMEOUT*1000)) 
 	{
@@ -111,11 +206,7 @@ void read_buffer(){
 					fail = 0;
 					distance = ( (rx_buf[1] << 8 ) + rx_buf[2]);
 					valdes[0] = distance;
-					#ifdef DEBUG
-					os_bzero(logstr, 100);
-					os_sprintf(logstr, "distance: %d \t freemem: %d\n", distance, system_get_free_heap_size());
-					uart1_tx_buffer(logstr, os_strlen(logstr));
-					#endif				
+					validate_distance(distance);
 				}
 			}				
 			len = 0;
@@ -134,6 +225,10 @@ void get_config_values() {
 #endif	
 	mm_cm = (sensors_param.cfgdes[2] > 0) ? 1 : 0;  
 	swap_uart = (sensors_param.cfgdes[3] > 0) ? 1 : 0;  
+	
+	distance_min = sensors_param.cfgdes[4];  
+	distance_max = sensors_param.cfgdes[5];  
+	correction = sensors_param.cfgdes[6];  
 }
 
 void ICACHE_FLASH_ATTR startfunc(){
@@ -220,6 +315,10 @@ void mqtt_send_cb()
 	}
 	system_soft_wdt_feed();
 	MQTT_Publish(mqtt_client, MQTT_TOPIC_DISTANCE, payload, os_strlen(payload), 2, 0, 1);
+	
+	system_soft_wdt_feed();
+	os_sprintf(payload,"%d", distance);
+	MQTT_Publish(mqtt_client, MQTT_TOPIC_FAIL, payload, os_strlen(payload), 2, 0, 1);
 	//free(payload);
 }
 #endif
@@ -227,7 +326,7 @@ void mqtt_send_cb()
 void webfunc(char *pbuf) {
 	system_soft_wdt_feed();
 	if ( delayed_counter > 0 ) {
-		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд", delayed_counter);
+		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд<br>", delayed_counter);
 	}
 
 	if ( mm_cm ) {
@@ -235,5 +334,13 @@ void webfunc(char *pbuf) {
 	} else {
 		os_sprintf(HTTPBUFF,"<b>Расcтояние:</b> %d мм", 	distance);
 	}
+	
+	uint32_t distance_map = 100 - remap(distance, 0, distance_max, 0, 100);
+	os_sprintf(HTTPBUFF,"<br><b>Заполнение:</b> %d %%", 	 ( distance_map > 100 ) ? 100 : distance_map);
+	
+	if ( fail == 1 ) {
+		os_sprintf(HTTPBUFF,"<br>Ошибка чтения данных или бак переполнен");
+	}
+	
 	os_sprintf(HTTPBUFF,"<br><b>Версия:</b> %s", FW_VER);
 }
