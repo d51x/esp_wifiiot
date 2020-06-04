@@ -4,7 +4,7 @@
 
 #define DEBUG
 
-#define FW_VER "1.3"
+#define FW_VER "1.4.1"
 
 #define DELAYED_START					60   //sec
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
@@ -24,7 +24,7 @@
 	#define MQTT_TOPIC_DISTANCE	"distance"
 	#define MQTT_PAYLOAD_BUF 20
 	MQTT_Client* mqtt_client;    //for non os sdk
-	char payload[MQTT_PAYLOAD_BUF];
+	//char payload[MQTT_PAYLOAD_BUF];
 	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
 
 	static volatile os_timer_t mqtt_send_timer;	
@@ -35,7 +35,8 @@
 uint8_t delayed_counter = DELAYED_START;
 
 	
-volatile uint8_t uart_ready = 1;
+uint8_t uart_ready = 1;
+uint8_t fail = 1;
 uint8_t swap_uart = 0;
 
 uint32_t distance = 0;
@@ -80,7 +81,7 @@ void read_buffer(){
 	static uint8_t len = 0;
 
 	uint32_t ts = micros();
-		
+	
 	WRITE_PERI_REG(UART_INT_CLR(UART0),UART_RXFIFO_FULL_INT_CLR);
 	while ( READ_PERI_REG(UART_STATUS(UART0)) & (UART_RXFIFO_CNT << UART_RXFIFO_CNT_S) 
 			&& ( micros() - ts < UART_READ_TIMEOUT*1000)) 
@@ -92,52 +93,35 @@ void read_buffer(){
 		ts = micros();
 		
 		
-		#ifdef DEBUG
+		#ifdef DEBUG1
 			os_bzero(logstr, 100);
 			os_sprintf(logstr, "%02X ", read);
 			uart1_tx_buffer(logstr, os_strlen(logstr));
 		#endif
 	
+		system_soft_wdt_feed();
 		if ( RESPONSE_SIZE == len) {
 			// что то прочитали
-			// validate
-			#ifdef DEBUG
-				os_bzero(logstr, 100);
-				os_sprintf(logstr, "\n response OK");
-				uart1_tx_buffer(logstr, os_strlen(logstr));
-			#endif
-		
+			// validate		
 			if ( rx_buf[0] == 0xFF) 
 			{
 				// check crc
 				uint16_t crc = (rx_buf[0] + rx_buf[1] + rx_buf[2]) & 0xFF;
 				if ( crc == rx_buf[3] ) {
+					fail = 0;
 					distance = ( (rx_buf[1] << 8 ) + rx_buf[2]);
 					valdes[0] = distance;
 					#ifdef DEBUG
 					os_bzero(logstr, 100);
-					os_sprintf(logstr, "\n distance: %d\n", distance);
+					os_sprintf(logstr, "distance: %d \t freemem: %d\n", distance, system_get_free_heap_size());
 					uart1_tx_buffer(logstr, os_strlen(logstr));
-					#endif				
-				} else {
-					#ifdef DEBUG
-						os_bzero(logstr, 100);
-						os_sprintf(logstr, "\n CRC FAIL\n");
-						uart1_tx_buffer(logstr, os_strlen(logstr));
 					#endif				
 				}
-			} else {
-				#ifdef DEBUG
-					os_bzero(logstr, 100);
-					os_sprintf(logstr, "\n FAILE: incorrect responce\n");
-					uart1_tx_buffer(logstr, os_strlen(logstr));
-				#endif
 			}				
 			len = 0;
 			uart_ready = 1;			
 			break;			
 		}
-		system_soft_wdt_feed();
 	}				
 }
 
@@ -167,7 +151,7 @@ void ICACHE_FLASH_ATTR startfunc(){
 
 	#ifdef DEBUG
 		uart_config(UART1);
-		uart_div_modify(UART1,	UART_CLK_FREQ	/BIT_RATE_9600);
+		uart_div_modify(UART1,	UART_CLK_FREQ	/BIT_RATE_115200);
 
 		os_install_putc1((void *)uart1_tx_buffer);
 	#endif
@@ -210,7 +194,7 @@ void ICACHE_FLASH_ATTR read_sonar_cb(){
 		// send command into uart
 		uart_ready = 0;
 		distance = 0; // ???? обнулять?
-			
+		fail = 1;
 		uint8_t cmd = COMMAND;
 		send_buffer(&cmd, 1);
 		os_delay_us(50);
@@ -226,19 +210,22 @@ void ICACHE_FLASH_ATTR read_sonar_cb(){
 void mqtt_send_cb() 
 {
 	if ( sensors_param.mqtten != 1 ) return;
+	//char *payload = (char *)os_malloc(MQTT_PAYLOAD_BUF);
+	char payload[MQTT_PAYLOAD_BUF];
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	if ( mm_cm ) {
 		os_sprintf(payload,"%d.%d", (uint16_t)distance/10, 		(uint16_t)(distance % 10));
 	} else {
 		os_sprintf(payload,"%d", distance);
 	}
-	MQTT_Publish(mqtt_client, MQTT_TOPIC_DISTANCE, payload, os_strlen(payload), 2, 0, 1);
 	system_soft_wdt_feed();
+	MQTT_Publish(mqtt_client, MQTT_TOPIC_DISTANCE, payload, os_strlen(payload), 2, 0, 1);
+	//free(payload);
 }
 #endif
 
 void webfunc(char *pbuf) {
-
+	system_soft_wdt_feed();
 	if ( delayed_counter > 0 ) {
 		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд", delayed_counter);
 	}
