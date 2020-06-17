@@ -4,7 +4,7 @@
 
 //#define DEBUG
 
-#define FW_VER "1.5"
+#define FW_VER "1.6"
 
 #define DELAYED_START					60   //sec
 #define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
@@ -139,7 +139,8 @@ void validate_distance(uint32_t dist)
 		// count = 10 - накопили 10 показаний
 		uint32_t avg = sum / count; 
 		fail = 0;
-		if ( max - min > correction) 
+		//if ( max - min > correction) 
+		if ( max - avg > correction || avg - min > correction) 
 		{
 			fail = 1;
 		}			
@@ -317,7 +318,8 @@ void mqtt_send_cb()
 	MQTT_Publish(mqtt_client, MQTT_TOPIC_DISTANCE, payload, os_strlen(payload), 2, 0, 1);
 	
 	system_soft_wdt_feed();
-	os_sprintf(payload,"%d", distance);
+	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
+	os_sprintf(payload,"%d", fail);
 	MQTT_Publish(mqtt_client, MQTT_TOPIC_FAIL, payload, os_strlen(payload), 2, 0, 1);
 	//free(payload);
 }
