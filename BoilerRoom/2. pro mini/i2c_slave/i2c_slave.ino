@@ -4,14 +4,16 @@
 #include <TimerOne.h>
 #include <EEPROM.h>
 
+
 #include <Wire.h>
 // SCL - A5
 // SDA - A4
 
-#define DEBUG
+#define FW_VER "1.1"
+//#define DEBUG
 
 #ifdef DEBUG
-#include <SoftwareSerial.h>
+  #include <SoftwareSerial.h>
 #endif
 
 #define DEVICE_ADDR 0x10
@@ -24,7 +26,8 @@
 #define CMD_GET_PZEM_DATA 0x04
 #define CMD_GET_UPTIME 0x05
 
-
+// TODO set relay gpio via MQTT
+// TODO get relay gpio via MQTT
 
 #define EEPROM_GPIO_MODE_ADDR 0x00
 #define EEPROM_DUTY_ADDR 0x01
@@ -33,24 +36,18 @@ volatile uint8_t duty_changed = 0;
 volatile uint8_t gpio_mode_changed = 0;
 volatile uint32_t uptime = 0;
 volatile uint8_t command = 255;
-/*
- * registers
- * reg: 00 - gpio_mode
- * reg: 01 - duty
- * reg: 02 - float - voltage
- * reg: 03 - float - current
- * reg: 04 - float - power
- * reg: 05 - float - energy
- */
+
 enum  {
   GPIO_MODE_NORMAL, // 0
   GPIO_MODE_DUTY    // 1
 } gpio_mode_e;
 
-#define PZEM_RX 2
-#define PZEM_TX 3
+#ifndef DEBUG
+  #define PZEM_RX 2
+  #define PZEM_TX 3
+#endif
 
-#define RELAY_PIN 13
+#define RELAY_PIN 4
 
 #define DUTY 100
 #define DUTY_TIME 10  //msec
@@ -59,8 +56,10 @@ enum  {
 #define RESPONSE_DATA_SIZE 18
 
 
-//PZEM004T pzem(PZEM_RX,PZEM_TX); 
-//IPAddress ip(192,168,1,1);
+#ifndef DEBUG
+  PZEM004T pzem(PZEM_RX,PZEM_TX); 
+  IPAddress ip(192,168,1,1);
+#endif
 
 #ifdef DEBUG
   SoftwareSerial mySerial(10, 11);
@@ -141,27 +140,30 @@ uint8_t load_gpio_mode() {
 
 void init_duty_timer() {
 
-              #ifdef DEBUG
-                mySerial.println("\ninit_duty_timer... ");
-            #endif
-            Serial.println("\ninit_duty_timer... ");
+    #ifdef DEBUG
+        mySerial.println("\ninit_duty_timer... ");
+        Serial.println("\ninit_duty_timer... ");
+    #endif
+            
     Timer1.initialize( DUTY_TIME*1000); 
     Timer1.attachInterrupt(ssr_pwm3);  
 }
 
 void deinit_duty_timer(){
-              #ifdef DEBUG
-                mySerial.println("\ndeinit_duty_timer... ");
-                
-            #endif
-  Serial.println("\ndeinit_duty_timer... ");
+  #ifdef DEBUG
+    mySerial.println("\ndeinit_duty_timer... ");
+    Serial.println("\ndeinit_duty_timer... ");              
+  #endif
+  
   Timer1.stop();
   Timer1.detachInterrupt();
 
-                
-                uint8_t st = duty > 0 ? 1 : 0 ;
+  uint8_t st = duty > 0 ? 1 : 0 ;
 
-                Serial.print("\nset gpio to "); Serial.println(st);
+  #ifdef DEBUG
+    Serial.print("\nset gpio to "); Serial.println(st);
+  #endif
+  
   gpio_set( RELAY_PIN, st);
 }
 
@@ -170,21 +172,21 @@ void setup() {
   duty = load_duty();
   gpio_mode = load_gpio_mode();
   
-  Serial.begin(9600);
   Wire.begin( DEVICE_ADDR  );  
   Wire.onReceive(receiveEvent);
   Wire.onRequest(requestEvent);
-#ifdef DEBUG  
-  mySerial.begin(9600);
-  mySerial.println("\nsystem started");
-#endif
-  Serial.println("\nsystem started");
-  //uart_pzem.begin(9600);
-  //pzem.setAddress(ip);
-
+  
+  #ifdef DEBUG  
+    Serial.begin(9600);
+    mySerial.begin(9600);
+    mySerial.println("\nsystem started");
+    Serial.println("\nsystem started");
+  #else
+    pzem.setAddress(ip);    
+  #endif
+  
   pinMode(RELAY_PIN, OUTPUT);
 
-  
   if ( gpio_mode == GPIO_MODE_DUTY ) {
     init_duty_timer();
   }
@@ -193,7 +195,6 @@ void setup() {
 
 void get_pzem_data() {
   if ( millis() - time_pzem >= PZEM_READ_INTERVAL ) {
-    Serial.print(".");
     // читаем pzem
     if ( (mode_interval == 1 || mode_interval % 10 == 0) && mode_interval != 60 ) {
       mode = 0;
@@ -212,37 +213,37 @@ void get_pzem_data() {
          #ifdef DEBUG 
             temp = random(1900, 2400) / 10.0;
          #else
-            //temp = pzem.voltage(ip);
+            temp = pzem.voltage(ip);
          #endif
          
-         if ( temp >= 0.0 ) {
+         if ( temp >= 0 ) {
           pzem_data[0] = temp;   
          }
     } else if ( mode == 1 ) {
       #ifdef DEBUG
         temp = random(0, 2000) / 100.0;
       #else
-        //temp = pzem.current(ip);
+        temp = pzem.current(ip);
       #endif
       
-      if ( temp >= 0.0 ) {
+      if ( temp >= 0 ) {
         pzem_data[1] = temp;
       }
     } else if ( mode == 2 ) {
         #ifdef DEBUG
           temp = pzem_data[0] * pzem_data[1];
         #else
-          //temp = pzem.power(ip);
+          temp = pzem.power(ip);
         #endif
 
-        if ( temp >= 0.0 ) {
+        if ( temp >= 0 ) {
           pzem_data[2] = temp;    
         }
     } else {   
         #ifdef DEBUG
           pzem_data[3] += random(1, 10);
         #else
-          //pzem_data[3] = pzem.energy(ip);
+          pzem_data[3] = pzem.energy(ip);
         #endif 
     }
 
@@ -252,16 +253,26 @@ void get_pzem_data() {
 
 void process_duty(){
   if ( millis() - time_process_duty < 100 ) return;
+  
   if ( duty_changed ) {
-    Serial.println("\n duty_changed... ");
+    
+    #ifdef DEBUG
+      Serial.println("\n duty_changed... ");
+    #endif  
+    
     if ( duty > 100 ) duty = 100;
     reg = duty;
-    if ( gpio_mode == GPIO_MODE_NORMAL ) {
-                 uint8_t st = duty > 0 ? 1 : 0 ;
+    if ( gpio_mode == GPIO_MODE_NORMAL ) 
+    {
+      uint8_t st = duty > 0 ? 1 : 0 ;
 
-                Serial.print("\nset gpio to "); Serial.println(st);
-          gpio_set( RELAY_PIN, st);     
+      #ifdef DEBUG
+        Serial.print("\nset gpio to "); Serial.println(st);
+      #endif  
+      
+      gpio_set( RELAY_PIN, st);     
     }
+    
     save_duty( duty ); 
     duty_changed = 0;
   }
@@ -270,8 +281,13 @@ void process_duty(){
 
 void process_gpio_mode(){
   if ( millis() - time_process_mode < 100 ) return;
-   if ( gpio_mode_changed ) {
-      Serial.println("\n gpio_mode_changed... ");
+  
+  if ( gpio_mode_changed ) 
+  {
+      
+      #ifdef DEBUG
+        Serial.println("\n gpio_mode_changed... ");
+      #endif
       
       if ( gpio_mode == GPIO_MODE_NORMAL ) {
           deinit_duty_timer();
