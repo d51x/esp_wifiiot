@@ -1,4 +1,4 @@
-#define FW_VER "2.41"
+#define FW_VER "2.42"
 
 /*
 	valdes[0] - ssr mode
@@ -12,6 +12,8 @@
 	valdes[7] - pump status
 	
 */
+
+#define CHECK_VALDES_INTERVAL 200
 
 #define ESP_GPIO_BOILER_FULL_POWER	15
 #define ESP_GPIO_BOILER_HALF_POWER	16
@@ -1087,7 +1089,7 @@ void ICACHE_FLASH_ATTR startfunc(){
  
  	os_timer_disarm(&check_valdes_timer);
 	os_timer_setfn(&check_valdes_timer, (os_timer_func_t *)check_valdes_cb, NULL);
-	os_timer_arm(&check_valdes_timer, 50, 1);
+	os_timer_arm(&check_valdes_timer, CHECK_VALDES_INTERVAL, 1);
 }
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
