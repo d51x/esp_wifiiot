@@ -1,4 +1,4 @@
-#define FW_VER "2.42"
+#define FW_VER "2.43"
 
 /*
 	valdes[0] - ssr mode
@@ -1044,9 +1044,11 @@ void ICACHE_FLASH_ATTR update_LCD(uint8_t page) {
 			// ***************** page 2, line 3 ******************************
 			lcd_line = 2;
 			os_memset(lcd_line_text, 0, 40);	
+			//3456280 
+			
 			os_sprintf(lcd_line_text, page2_line3
-											, (int)(powerRegData.e.f / 1000)
-											, (int)(powerRegData.e.f * 1000) % 1000
+											, (int)(powerRegData.e.f / 1000)			// 3456280 / 1000 = 3456
+											, (((int)(powerRegData.e.f) % 1000) / 100)		// (3456280 % 1000) / 100 =  280 / 100 = 2.8
 											);	
 			LCD_print(lcd_line, lcd_line_text);			
 
@@ -1059,7 +1061,7 @@ void ICACHE_FLASH_ATTR update_LCD(uint8_t page) {
 											, (int)(powerRegData.c.f )
 											, (int)(powerRegData.c.f * 10) % 10
 											, (int)(powerRegData.p.f / 1000)
-											, (int)(powerRegData.p.f)  % 1000
+											, (((int)(powerRegData.p.f)  % 1000) / 100)
 											);	
 			LCD_print(lcd_line, lcd_line_text);	
 			break;
