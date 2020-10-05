@@ -23,7 +23,7 @@
 
 #define IODIRA      0x00    // регистр, указыващий направления портов output/input
 #define IODIRB      0x01
-#define IPOLA       0x02    // инверсия ног
+#define IPOLA       0x02    // Input polarity инверсия ног только для входов
 #define IPOLB       0x03
 #define GPINTENA    0x04    // прерывания на ногах
 #define GPINTENB    0x05
