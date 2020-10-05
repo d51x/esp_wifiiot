@@ -1,4 +1,7 @@
-#define FW_VER "2.43"
+/*
+2.44 - управление нагревателем через GPIO15, даже если не подключено
+*/
+#define FW_VER "2.44"
 
 /*
 	valdes[0] - ssr mode
@@ -13,7 +16,7 @@
 	
 */
 
-#define CHECK_VALDES_INTERVAL 200
+#define CHECK_PARAMS_INTERVAL 200
 
 #define ESP_GPIO_BOILER_FULL_POWER	15
 #define ESP_GPIO_BOILER_HALF_POWER	16
@@ -206,8 +209,8 @@ static volatile os_timer_t mqtt_send_timer;
 void ICACHE_FLASH_ATTR mqtt_send_cb();
 #endif
 
-static volatile os_timer_t check_valdes_timer;	
-void ICACHE_FLASH_ATTR check_valdes_cb();
+static volatile os_timer_t check_params_timer;	
+void ICACHE_FLASH_ATTR check_params_cb();
 
 enum Gpio_State {
 	OFF,
@@ -268,6 +271,7 @@ void turn_on_display() {
 	if ( !display_backlight ) {
 		display_backlight = 1;
 		GPIO_ALL(GPIO_LCD_BACKLIGHT, display_backlight);
+		delay(20);
 	}
 	// TODO: start timer for 30 sec to turn off display
 }
@@ -275,35 +279,51 @@ void turn_on_display() {
 void turn_off_display(){
 	display_backlight = 0;
 	GPIO_ALL(GPIO_LCD_BACKLIGHT, display_backlight);
-	
+	delay(20);
 }
 
 
 void turn_on_boiler() {
+	
 	// TODO: напрямую через MCPwrite_reg16
 	GPIO_ALL(MCP23017_IOT_LED_RED, ON);
-	
+	delay(20);
 	
 	if ( BOILER_VIA_POWERREG == ON ) {
 		sensors_param.cfgdes[1] = powerRegData.prev_duty;
-		//check_valdes_cb();
+		////check_params_cb();
 	} else {
-		GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, ON);
+		
+		static uint8_t half_mode = GPIO_ALL_GET( ESP_GPIO_BOILER_HALF_POWER );
+
+		if ( !half_mode ) {
+			GPIO_ALL(MCP23017_IOT_LED_YELLOW, OFF);
+			GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, ON);
+			GPIO_ALL( ESP_GPIO_BOILER_HALF_POWER, OFF);
+		} else {
+			GPIO_ALL(MCP23017_IOT_LED_YELLOW, ON);
+			GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, OFF);
+			GPIO_ALL( ESP_GPIO_BOILER_HALF_POWER, ON);
+		}
+		delay(20);	
+		half_mode != half_mode;	
 	}
 	
-		
 }
 
 void turn_off_boiler() {
 	GPIO_ALL(MCP23017_IOT_LED_RED, OFF);
-	
+	delay(20);
+	GPIO_ALL(MCP23017_IOT_LED_YELLOW, OFF);
+	delay(20);
 	
 	if ( BOILER_VIA_POWERREG == ON ) {
 		if ( powerRegData.duty > 0 ) powerRegData.prev_duty = powerRegData.duty;
 		sensors_param.cfgdes[1] = OFF;
-		// //check_valdes_cb();
+	//	// //check_params_cb();
 	} else {
 		GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, OFF);
+		GPIO_ALL(ESP_GPIO_BOILER_HALF_POWER, OFF);
 	}
 	
 		
@@ -835,7 +855,7 @@ void ICACHE_FLASH_ATTR mqtt_send_cb(){
 }
 #endif
 
-void ICACHE_FLASH_ATTR check_valdes_cb(){
+void ICACHE_FLASH_ATTR check_params_cb(){
     // запись данных только при изменении
     static uint8_t not_sent_mode = 255;  // выставляется сюда значение только при изменении, потом его пишем по i2c, если оно не 255, если занято, то оставляем текущее знаение, если записали, то в 255 ставим обратно
     static uint8_t not_sent_duty = 255;
@@ -844,7 +864,11 @@ void ICACHE_FLASH_ATTR check_valdes_cb(){
     uint8_t val = 0;
     uint8_t val2 = 0;
 
-    //=============================================
+    //============== Boiler Power ================================
+	// === 1. ESP_GPIO
+	static uint32_t prev_val = 0;
+	
+	// === 1. CONFIG
     val = sensors_param.cfgdes[0] > 0 ? 1 : 0;
     if ( val != powerRegData.mode ) {
         powerRegData.mode = val;
@@ -858,18 +882,20 @@ void ICACHE_FLASH_ATTR check_valdes_cb(){
                 os_delay_us(20);
             }
         #endif
+		GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, val);
     }
-
+	
+	// === 2. VALDES
     val = ( valdes[0] > 1 ) ? 1 : valdes[0];
     if ( val != powerRegData.mode ) {
         powerRegData.mode = val;
         not_sent_mode = val;
         sensors_param.cfgdes[0] = powerRegData.mode;
+		GPIO_ALL(ESP_GPIO_BOILER_FULL_POWER, val);
         need_save = 1;
     }
-
-
-    //===================================================
+	
+    //===================================================	
     val = sensors_param.cfgdes[1] > 100 ? 100 : sensors_param.cfgdes[1];
     if ( val != powerRegData.duty) {
         powerRegData.duty = val;
@@ -892,6 +918,7 @@ void ICACHE_FLASH_ATTR check_valdes_cb(){
         need_save = 1;
     }
 
+	// =================================================================
     if ( not_sent_mode < 255 ) {
         //if ( power_reg_set_mode( powerRegData.mode ) ) {
         if ( power_reg_set_mode( not_sent_mode ) ) {
@@ -1089,9 +1116,9 @@ void ICACHE_FLASH_ATTR startfunc(){
 	    os_timer_arm(&mqtt_send_timer, mqtt_send_interval_sec * 1000, 1);        
     #endif
  
- 	os_timer_disarm(&check_valdes_timer);
-	os_timer_setfn(&check_valdes_timer, (os_timer_func_t *)check_valdes_cb, NULL);
-	os_timer_arm(&check_valdes_timer, CHECK_VALDES_INTERVAL, 1);
+ 	os_timer_disarm(&check_params_timer);
+	os_timer_setfn(&check_params_timer, (os_timer_func_t *)check_params_cb, NULL);
+	os_timer_arm(&check_params_timer, CHECK_PARAMS_INTERVAL, 1);
 }
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
