@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.40"
+#define FW_VER "1.44"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -570,10 +570,10 @@ void webfunc(char *pbuf)
         os_sprintf(HTTPBUFF,"<br>Режим: -------"); 
 
     os_sprintf(HTTPBUFF, "<div>");
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=0'><div class='g_%d k fll' style='width:60px'>Ручной</div></a>", work_mode == 0);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=1'><div class='g_%d k fll' style='width:60px'>Авто</div></a>", work_mode == 1);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=2'><div class='g_%d k fll' style='width:60px'>Котел 1</div></a>", work_mode == 2);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=3'><div class='g_%d k fll' style='width:60px'>Котел 2</div></a>", work_mode == 3);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,1)'><div class='g_%d k fll v00' id='v01' style='width:60px'>Авто</div></a>", work_mode == 1);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,2)'><div class='g_%d k fll v00' id='v02' style='width:60px'>Котел 1</div></a>", work_mode == 2);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,0)'><div class='g_%d k fll v00' id='v00' style='width:60px'>Ручной</div></a>", work_mode == 0);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,3)'><div class='g_%d k fll v00' id='v03' style='width:60px'>Котел 2</div></a>", work_mode == 3);
     os_sprintf(HTTPBUFF, "</div>");
 
     os_sprintf(HTTPBUFF,"<br>Термостат: %s", thermo->enabled ? "Вкл" : "Выкл"); 
@@ -649,7 +649,12 @@ void webfunc(char *pbuf)
                         "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
                         "} "
                         "}; "
-                        
+                        "function valdes(idx,value){"
+                        "ajax_request(\"/valdes?int=\" + idx + \"&set=\" + value, function(res){ let vals = document.getElementsByClassName('v0' + idx);"
+                        "for  (let i=0;i<vals.length;i++){vals[i].classList.remove(\"g_1\");vals[i].classList.add(\"g_0\");}"
+                        "document.getElementById('v0'+ value).classList.add(\"g_1\");"
+                        "});"
+                        "}"
                          "</script>"
                          );
 
