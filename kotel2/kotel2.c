@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.33"
+#define FW_VER "1.40"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -408,12 +408,13 @@ bool ICACHE_FLASH_ATTR handle_config_param(uint8_t cfg_idx, int8_t valdes_idx, i
     // проверка valdes в первую очередь, могли прийти по http get или по mqtt с внешней системы
     // сравниваем с текущим значением  и меняем его, а так же меняем cfgdes
     // теперь смотрим valdes, поменялось ли там значение
-    if ( valdes_idx > 0 ) // для переменной используется valdes
+    if ( valdes_idx >= 0 ) // для переменной используется valdes
     {    
         val = ( valdes[valdes_idx] < min_val || valdes[valdes_idx] > max_val ) ? def_val : valdes[valdes_idx]; // различные проверки, можно убрать
         if ( val != *param ) {
             // прилетело новое значение, сохранить
-            memcpy(param, &val, sizeof(int32_t));
+            //memcpy(param, &val, sizeof(int32_t));
+            *param = val;
             sensors_param.cfgdes[cfg_idx] = val;    // в опцию пропишем новое значени
             need_save = true;                          // флаг, что надо сохранить изменени опции во флеш
         }  
@@ -422,7 +423,8 @@ bool ICACHE_FLASH_ATTR handle_config_param(uint8_t cfg_idx, int8_t valdes_idx, i
     //  а теперь смотрим опцию, поменялось ли там значение
     val =  (sensors_param.cfgdes[cfg_idx] < min_val || sensors_param.cfgdes[cfg_idx] > max_val) ? def_val : sensors_param.cfgdes[cfg_idx];  
     if ( val != *param ) {  // значение изменилось, в опции новое значение
-        memcpy(param, &val, sizeof(int32_t));
+        //memcpy(param, &val, sizeof(int32_t));
+        *param = val;
         mqtt_send_valuedes(valdes_idx, val);
     }
 
@@ -533,40 +535,6 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 
 void webfunc(char *pbuf) 
 {
-    uint8_t gpio_st = GPIO_ALL_GET(KOTEL1_GPIO);
-
-    os_sprintf(HTTPBUFF,"<br>Котел 1 GPIO: %s", gpio_st ? "Вкл" : "Выкл");
-    
-
-    //os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k' style='width:100px'>%s</div></a>"
-                            , KOTEL1_GPIO
-                            , gpio_st
-                            , KOTEL1_NAME);
-
-    gpio_st = GPIO_ALL_GET(KOTEL2_GPIO);
-    os_sprintf(HTTPBUFF,"<br>Котел 2 GPIO: %s", gpio_st ? "Вкл" : "Выкл");
-    //os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k ' style='width:100px'>%s</div></a>"
-                            , KOTEL2_GPIO
-                            , gpio_st
-                            , KOTEL2_NAME);
-
-    #ifdef KOTEL2_NIGHT_MODE_GPIO
-    gpio_st = GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO);
-    //os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k ' style='width:100px'>%s</div></a>"
-                            , KOTEL2_NIGHT_MODE_GPIO
-                            , gpio_st
-                            , "Ночной режим");
-    #endif
-
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=0'><div class='g_%d k fll' style='width:60px'>Ручной</div></a>", work_mode == 0);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=1'><div class='g_%d k fll' style='width:60px'>Авто</div></a>", work_mode == 1);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=2'><div class='g_%d k fll' style='width:60px'>Котел 1</div></a>", work_mode == 2);
-    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=3'><div class='g_%d k fll' style='width:60px'>Котел 2</div></a>", work_mode == 3);
-
-
     os_sprintf(HTTPBUFF,"<br>Активный котел: ");
     if ( active_kotel == KOTEL_1 )
         os_sprintf(HTTPBUFF, KOTEL1_NAME);
@@ -575,8 +543,20 @@ void webfunc(char *pbuf)
     else 
         os_sprintf(HTTPBUFF, KOTEL_NONE_NAME);
 
+    os_sprintf(HTTPBUFF, "<div>");
+    uint8_t gpio_st = GPIO_ALL_GET(KOTEL1_GPIO);
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+                            , KOTEL1_GPIO
+                            , gpio_st
+                            , KOTEL1_NAME);
 
-    os_sprintf(HTTPBUFF,"<br>valdes0: %d", valdes[0]); 
+    gpio_st = GPIO_ALL_GET(KOTEL2_GPIO);
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+                            , KOTEL2_GPIO
+                            , gpio_st
+                            , KOTEL2_NAME);
+    os_sprintf(HTTPBUFF, "</div>");
+
     os_sprintf(HTTPBUFF,"<br>Режим: "); 
     if (work_mode == 0)
         os_sprintf(HTTPBUFF,"Ручной"); 
@@ -588,13 +568,30 @@ void webfunc(char *pbuf)
         os_sprintf(HTTPBUFF,"всегда %s", KOTEL2_NAME); 
     else
         os_sprintf(HTTPBUFF,"<br>Режим: -------"); 
-    
+
+    os_sprintf(HTTPBUFF, "<div>");
+    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=0'><div class='g_%d k fll' style='width:60px'>Ручной</div></a>", work_mode == 0);
+    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=1'><div class='g_%d k fll' style='width:60px'>Авто</div></a>", work_mode == 1);
+    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=2'><div class='g_%d k fll' style='width:60px'>Котел 1</div></a>", work_mode == 2);
+    os_sprintf(HTTPBUFF, "<a href='valdes?int=0&set=3'><div class='g_%d k fll' style='width:60px'>Котел 2</div></a>", work_mode == 3);
+    os_sprintf(HTTPBUFF, "</div>");
+
     os_sprintf(HTTPBUFF,"<br>Термостат: %s", thermo->enabled ? "Вкл" : "Выкл"); 
     os_sprintf(HTTPBUFF,"<br>Состояние: %s", thermo->state ? "Нагрев" : "Ожидание"); 
     os_sprintf(HTTPBUFF,"<br>Выбег насоса (%d сек): %s", pump_delay, is_pump_active ? "Да" : "Нет"); 
 
     #ifdef KOTEL2_NIGHT_MODE_GPIO
     os_sprintf(HTTPBUFF,"<br>Режим ESC: %s", GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO) ? "Да" : "Нет"); 
+    #endif
+
+    #ifdef KOTEL2_NIGHT_MODE_GPIO
+    gpio_st = GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO);
+    os_sprintf(HTTPBUFF, "<div>");
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+                            , KOTEL2_NIGHT_MODE_GPIO
+                            , gpio_st
+                            , "Ночной режим");
+    os_sprintf(HTTPBUFF, "</div>");
     #endif
 
     os_sprintf(HTTPBUFF,"<br>Период: %d сек", thermo->period); 
@@ -643,4 +640,19 @@ void webfunc(char *pbuf)
     //}
     os_sprintf(HTTPBUFF,"<br><small>Прошивка: %s</small>", FW_VER); 
 
+    os_sprintf(HTTPBUFF, "<script type='text/javascript'>"
+
+                        "window.onload = function(){"
+                        " let gg = document.getElementsByClassName(\"h\")[1];"
+                        " if ( gg.innerHTML == \"GPIO:\")"
+                        " { gg.style.display=\"none\";"
+                        "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
+                        "} "
+                        "}; "
+                        
+                         "</script>"
+                         );
+
+                         // class=c2
+                         //<div class="h" style="background: #73c140">GPIO:</div>
 }
