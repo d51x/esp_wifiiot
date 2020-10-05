@@ -2,14 +2,14 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.18"
+#define FW_VER "1.23"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
 используется 2 термостата
 cfg0 (valdes0)   режим работы управления котлами:
     0 - ручной, термостаты не включены, можно кнопками вкл/выкл gpio котлов
-    1 - авто, используются термостаты в автоматическом режиме
+    1 - авто, используются термостаты в автоматическом режиме, можно как с глобальной уставкой, так и по расписанию
     2 - активный котел 1, используется термостат
     3 - активный котел 2, используется термостат
 
@@ -18,7 +18,7 @@ cfg2    период срабатывания термостата в секун
 cfg3    гистерезис х10
 cfg4 (valdes2)   глобальная устав, принимаем из внешней системы
 
-cfg5    задержка выключения насоса электрокотла, сек
+cfg5    задержка выключения насоса котла2, сек,      котел 1 не должен включаться столько времени, после выключения котла 2
 cfg6    расписание (0 - используется, 1 - не используется)
 
 cfg7	часы-минуты Т1
@@ -42,11 +42,15 @@ cfg16	уставка для Т5
 #define GPIO_ON 1
 #define GPIO_OFF 0
 
-#define KOTEL1_GPIO 12 // kiturami
+#define KOTEL_NONE_NAME "--------"
+#define KOTEL1_GPIO 15 // kiturami
+#define KOTEL1_NAME "дизельный"
 //#define KOTEL2_GPIO 14 // protherm
 #define KOTEL2_GPIO 13 // protherm
-//#define KOTEL_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
-#define KOTEL_NIGHT_MODE_GPIO 2  // ESC режим для Протерма
+#define KOTEL2_NAME "электрический"
+//#define KOTEL2_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
+
+//#define KOTEL2_NIGHT_MODE_GPIO 2  // ESC режим для Протерма
 
 #define NIGHT_MODE_START_TIME 23
 #define NIGHT_MODE_END_TIME 7
@@ -56,13 +60,13 @@ cfg16	уставка для Т5
 #define THERMOSTAT_HYSTERESIS 5
 
 #define PUMP_DELAY 300
-#define KOTEL_ELECTRO_MIN_TEMP -100 // -10  x10
-#define KOTEL_DIESEL_MAX_TEMP  50 // 5  x10
+#define KOTEL_2_MIN_TEMP -100 // -10  x10
+#define KOTEL_1_MAX_TEMP  50 // 5  x10
 
 typedef enum {
     KOTEL_NONE,
-    KOTEL_DIESEL,
-    KOTEL_ELECTRO
+    KOTEL_1,
+    KOTEL_2
 } kotel_type_t;
 
 kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - дизельный, 2 - электрический
@@ -94,10 +98,14 @@ kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - 
 
 uint8_t work_mode = 0; // режим работы (cfg0)
 uint16_t pump_delay = 300;
-uint8_t kotel_gpio = 255;
+uint8_t is_pump_active = 0;
+os_timer_t pump_timer;
 
-int16_t kotel_electro_min_temp;
-int16_t kotel_diesel_max_temp;
+uint8_t kotel_gpio = 255;
+uint16_t global_tempset = THERMOSTAT_TEMPSET;
+
+int16_t kotel_2_min_temp;
+int16_t kotel_1_max_temp;
 
 typedef struct schedules_tempset {
     int32_t hhmm;
@@ -140,7 +148,7 @@ void ICACHE_FLASH_ATTR thermostat_enable(thermostat_handle_t thermo_h)
 void ICACHE_FLASH_ATTR thermostat_disable(thermostat_handle_t thermo_h)
 {
     thermostat_t *thermo = (thermostat_t *) thermo_h;
-    //thermo->state = 0;
+    thermo->state = 0;
     thermo->enabled = 0;
 }
 
@@ -249,13 +257,10 @@ int16_t ICACHE_FLASH_ATTR get_temp()
     return _temp;
 }
 
-// функция изменения значения уставки по времени
-// функция должна отрабатывать каждую минуту для корректировки уставки по расписанию
-// TODO: rename to get_schedule_index, потом температуру брать по индексу, или глобальную, если -1 индекс.
-uint16_t ICACHE_FLASH_ATTR calc_tempset(uint16_t g_tempset) 
+int8_t ICACHE_FLASH_ATTR get_schedule_index() 
 {
-    uint16_t _tempset = g_tempset; // выставить глобальную уставку
-    if ( !schedule_enabled ) return _tempset;
+    int8_t idx = -1;
+    if ( !schedule_enabled ) return idx;
 
     uint8_t i;
 
@@ -263,9 +268,6 @@ uint16_t ICACHE_FLASH_ATTR calc_tempset(uint16_t g_tempset)
 
     for ( i = 0; i < CFG_TEMPSET_SCHEDULE_COUNT; i++)
     {
-        //if ( schedules_tempset[i].hour == 0 && schedules_tempset[i].min == 0  )
-        //    continue;
-
         uint16_t schedule_minutes = schedules_tempset[i].hour*60 + schedules_tempset[i].min;
         uint16_t schedule_minutes_next = 23*60+59;
         uint16_t schedule_minutes_prev = 0;
@@ -278,20 +280,33 @@ uint16_t ICACHE_FLASH_ATTR calc_tempset(uint16_t g_tempset)
 
         if ( is_active )
         {
-            _tempset = schedules_tempset[i].tempset;
+            idx = i;
             break;
         }
         
     }
-
-    return _tempset;
+    return idx;
 }
 
-kotel_type_t ICACHE_FLASH_ATTR select_kotel()
+
+void ICACHE_FLASH_ATTR reset_pump_cb(){
+    is_pump_active = 0;
+}
+
+void ICACHE_FLASH_ATTR start_pump_timer(){
+    is_pump_active = 1; // активируем флаг, что насос котла 2 еще работает после выключения котла 2
+    os_timer_disarm( &pump_timer );
+    os_timer_setfn( &pump_timer, (os_timer_func_t *)reset_pump_cb, NULL);
+    os_timer_arm( &pump_timer, pump_delay * 1000, 0);    
+}
+
+kotel_type_t ICACHE_FLASH_ATTR set_active_kotel()
 {
+    // функция срабатывает каждую секунду
     kotel_type_t _kotel = KOTEL_NONE;
 
     if ( work_mode == 0)  {
+        // ручное управление котлами через gpio, термостат не используется 
         return _kotel;
     }
 
@@ -299,22 +314,38 @@ kotel_type_t ICACHE_FLASH_ATTR select_kotel()
         // auto режим
         if ( time_loc.hour >= NIGHT_MODE_END_TIME && time_loc.hour < NIGHT_MODE_START_TIME ) {
             // день, Т1
-            _kotel = KOTEL_DIESEL; 
+            _kotel = KOTEL_1; 
             kotel_gpio = KOTEL1_GPIO;
-            GPIO_ALL(KOTEL_NIGHT_MODE_GPIO, GPIO_OFF);
+            
+            #ifdef KOTEL2_NIGHT_MODE_GPIO
+                GPIO_ALL(KOTEL2_NIGHT_MODE_GPIO, GPIO_OFF);
+            #endif
+
+            uint8_t kotel2_gpio_state = GPIO_ALL_GET(KOTEL2_GPIO);
+            if ( kotel2_gpio_state )
+            {
+                start_pump_timer();
+            }
             GPIO_ALL(KOTEL2_GPIO, GPIO_OFF);
+            
         } else {
             // ночь, Т2
-            _kotel = KOTEL_ELECTRO; 
+            _kotel = KOTEL_2; 
             kotel_gpio = KOTEL2_GPIO;
-            GPIO_ALL(KOTEL_NIGHT_MODE_GPIO, GPIO_ON);
+
+            #ifdef KOTEL2_NIGHT_MODE_GPIO
+                GPIO_ALL(KOTEL2_NIGHT_MODE_GPIO, GPIO_ON);
+            #endif
+            
             GPIO_ALL(KOTEL1_GPIO, GPIO_OFF);
         }   
     } else if ( work_mode == 2 ) {
-        _kotel = KOTEL_DIESEL;
+        // принудительная работа котла 1 по термостату, котел2 не используется
+        _kotel = KOTEL_1;
         kotel_gpio = KOTEL1_GPIO;
     } else if ( work_mode == 3 ) {
-        _kotel = KOTEL_ELECTRO;
+        // принудительная работа котла 2 по термостату, котел1 не используется
+        _kotel = KOTEL_2;
         kotel_gpio = KOTEL2_GPIO;
     }
 
@@ -326,12 +357,14 @@ void ICACHE_FLASH_ATTR load_off(void *args)
     // функция отключения нагрузки
     //GPIO_ALL_M(kotel_gpio, GPIO_OFF);
     GPIO_ALL(kotel_gpio, GPIO_OFF);
+    if ( kotel_gpio == KOTEL2_GPIO ) start_pump_timer();
 }
 
 void ICACHE_FLASH_ATTR load_on(void *args)
 {
     // функция включения нагрузки
-    //GPIO_ALL_M(kotel_gpio, GPIO_ON);   
+    //GPIO_ALL_M(kotel_gpio, GPIO_ON);  
+    if ( kotel_gpio == KOTEL1_GPIO && is_pump_active ) return; // следующий запуск по термостату должен включить, т.к. к тому времени флаг должен быть сброшен
     GPIO_ALL(kotel_gpio, GPIO_ON);   
 }
 
@@ -412,9 +445,9 @@ void ICACHE_FLASH_ATTR handle_params() {
     need_save |= handle_config_param(CFG_INDEX_THERMO_HYSTERESIS,       VALDES_INDEX_THERMO_HYSTERESIS,         &val,      THERMOSTAT_HYSTERESIS, 1, 100);
     thermo->hysteresis = val;
 
-    val = thermo->tempset;
+    val = global_tempset;
     need_save |= handle_config_param(CFG_INDEX_THERMO_TEMPSET,          VALDES_INDEX_THERMO_TEMPSET,            &val,         THERMOSTAT_TEMPSET, 50, 300);
-    thermo->tempset = val;
+    global_tempset = val;
 
     val = pump_delay;
     need_save |= handle_config_param(CFG_INDEX_PUMP_DELAY,  VALDES_INDEX_PUMP_DELAY,    &val,    PUMP_DELAY, 0, 1200);
@@ -450,21 +483,25 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 
     // управление состоянием термостата
     if ( work_mode == 0)  {
+        // термостат недоступен
         thermostat_disable(thermo_h);
     } else {
         thermostat_enable(thermo_h);
-    }    
 
-    // вычисление уставки по таблице
-    //uint16_t tempset = calc_tempset(valdes[2]);
-    uint16_t tempset = calc_tempset( thermo->tempset );
-    thermostat_set_tempset(thermo_h, tempset);
+        // вычисление уставки по расписанию, если не найдено расписание или отключено, то используется глобальная уставка
+        int8_t schedule_idx = get_schedule_index();
+
+        if ( schedule_idx >= 0)
+            thermostat_set_tempset(thermo_h, schedules_tempset[schedule_idx].tempset);    
+        else
+            thermostat_set_tempset(thermo_h, global_tempset);        
+    }    
 
     if ( timersrc > 60 ) {
         // определение активного котла
-        active_kotel = select_kotel();
+        active_kotel = set_active_kotel();
 
-        if ( timersrc % thermo->period == 0 )
+        if ( thermo->enabled && timersrc % thermo->period == 0 )
         {
             // сработка термостата с заданным интервалом
             int16_t temp = get_temp();
@@ -488,13 +525,16 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 
 void webfunc(char *pbuf) 
 {
+    os_sprintf(HTTPBUFF,"<br>Котел 1 GPIO: %s", GPIO_ALL_GET(KOTEL1_GPIO) ? "Вкл" : "Выкл");
+    os_sprintf(HTTPBUFF,"<br>Котел 2 GPIO: %s", GPIO_ALL_GET(KOTEL2_GPIO) ? "Вкл" : "Выкл");
+
     os_sprintf(HTTPBUFF,"<br>Активный котел: ");
-    if ( active_kotel == KOTEL_DIESEL )
-        os_sprintf(HTTPBUFF,"дизельный");
-    else if ( active_kotel == KOTEL_ELECTRO )
-        os_sprintf(HTTPBUFF,"электрический");
+    if ( active_kotel == KOTEL_1 )
+        os_sprintf(HTTPBUFF, KOTEL1_NAME);
+    else if ( active_kotel == KOTEL_2 )
+        os_sprintf(HTTPBUFF, KOTEL2_NAME);
     else 
-        os_sprintf(HTTPBUFF,"-------------");
+        os_sprintf(HTTPBUFF, KOTEL_NONE_NAME);
 
 
     os_sprintf(HTTPBUFF,"<br>Режим: "); 
@@ -503,22 +543,29 @@ void webfunc(char *pbuf)
     else if ( work_mode == 1)
         os_sprintf(HTTPBUFF,"Авто"); 
     else if ( work_mode == 2)
-        os_sprintf(HTTPBUFF,"всегда дизель"); 
+        os_sprintf(HTTPBUFF,"всегда %s", KOTEL1_NAME); 
     else if ( work_mode == 3)
-        os_sprintf(HTTPBUFF,"всегда электрический"); 
+        os_sprintf(HTTPBUFF,"всегда %s", KOTEL2_NAME); 
     else
         os_sprintf(HTTPBUFF,"<br>Режим: -------"); 
     
     os_sprintf(HTTPBUFF,"<br>Термостат: %s", thermo->enabled ? "Вкл" : "Выкл"); 
     os_sprintf(HTTPBUFF,"<br>Состояние: %s", thermo->state ? "Нагрев" : "Ожидание"); 
-    os_sprintf(HTTPBUFF,"<br>Режим ESC: %s", GPIO_ALL_GET(KOTEL_NIGHT_MODE_GPIO) ? "Да" : "Нет"); 
+    os_sprintf(HTTPBUFF,"<br>Выбег насоса (%d сек): %s", pump_delay, is_pump_active ? "Да" : "Нет"); 
+
+    #ifdef KOTEL2_NIGHT_MODE_GPIO
+    os_sprintf(HTTPBUFF,"<br>Режим ESC: %s", GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO) ? "Да" : "Нет"); 
+    #endif
 
     os_sprintf(HTTPBUFF,"<br>Период: %d сек", thermo->period); 
-    os_sprintf(HTTPBUFF,"<br>Уставка: %d.%d °C", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
+    os_sprintf(HTTPBUFF,"<br>Глобальная Уставка: %d.%d °C", (uint16_t)(global_tempset / 10), global_tempset % 10); 
+    os_sprintf(HTTPBUFF,"<br>Текущая Уставка: %d.%d °C", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
     os_sprintf(HTTPBUFF,"<br>Гистерезис: %d.%d °C", (uint16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10); 
     os_sprintf(HTTPBUFF,"<br>Комната: %d.%d °C", (int16_t)(thermo->value / 10), thermo->value % 10); 
     
     os_sprintf(HTTPBUFF,"<br><br>Улица: %d.%d °C", (int16_t)(vsens[3][0] / 10), vsens[3][0] % 10); 
+
+    int8_t schedule_idx = get_schedule_index();
 
     uint16_t local_minutes = time_loc.hour*60 + time_loc.min;
     os_sprintf(HTTPBUFF,"<br><br>Текущие минуты: %d", local_minutes); 
@@ -538,18 +585,15 @@ void webfunc(char *pbuf)
             if ( i > 0 ) schedule_minutes_prev = schedules_tempset[i-1].hour*60 + schedules_tempset[i-1].min;
             if ( i <= CFG_TEMPSET_SCHEDULE_COUNT-2 ) schedule_minutes_next = schedules_tempset[i+1].hour*60 + schedules_tempset[i+1].min;
 
-            bool is_active = local_minutes >= schedule_minutes
-                          && local_minutes > schedule_minutes_prev
-                          && local_minutes < schedule_minutes_next;
 
-            os_sprintf(HTTPBUFF,"<tr %s><td>%d.</td><td>&nbsp;с %02d:%02d</td><td>%d.%d °C</td><td>%s</td><td>%d -> %d <- %d</td></tr>"
-                    , is_active  ? "style='color: red'" : ""
+            os_sprintf(HTTPBUFF,"<tr %s><td>%d.</td><td>&nbsp;с %02d:%02d</td><td>&nbsp;%d.%d °C</td><td>%s</td><td>%d -> %d <- %d</td></tr>"
+                    , schedule_idx == i  ? "style='color: red'" : ""
                     , i+1
                     , schedules_tempset[i].hour
                     , schedules_tempset[i].min
                     , (uint16_t)(schedules_tempset[i].tempset / 10)
                     , schedules_tempset[i].tempset % 10 
-                    , is_active ? "активно" : ""
+                    , schedule_idx == i ? "активно" : ""
                     , schedule_minutes
                     , local_minutes
                     , schedule_minutes_next); 
