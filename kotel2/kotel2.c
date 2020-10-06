@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.65"
+#define FW_VER "1.73"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -21,6 +21,11 @@ cfg4 (valdes2)   глобальная устав, принимаем из вне
 cfg5    задержка выключения насоса котла2, сек,      котел 1 не должен включаться столько времени, после выключения котла 2
 cfg6    расписание (0 - используется, 1 - не используется)
 
+!!!!! для расписания доступно 5 временных интервалов, их можно увеличить (до 7) или уменьшить через CFG_TEMPSET_SCHEDULE_COUNT
+!!!!! если используете расписание, то необходимо заполнять все временные интервалы и уставки
+!!!!! заполнение всех временных интервалов должно идти последовательно по времени от меньшего к большему
+!!!!! температура уставки так же должна быть заполнена
+!!!!! если вам интервалов много, сократите их
 cfg7	часы-минуты Т1
 cfg8	уставка для Т1
 	
@@ -43,11 +48,12 @@ cfg16	уставка для Т5
 #define GPIO_OFF 0
 
 #define KOTEL_NONE_NAME "--------"
-#define KOTEL1_GPIO 15 // kiturami
+#define KOTEL1_GPIO 15 
 //#define KOTEL1_NAME "дизельный"
 #define KOTEL1_NAME "Котел1"
-//#define KOTEL2_GPIO 14 // protherm
-#define KOTEL2_GPIO 13 // protherm
+
+// !!!! если не нужен котел 2, просто закоментируйте строки
+#define KOTEL2_GPIO 13 
 //#define KOTEL2_NAME "электрический"
 #define KOTEL2_NAME "Котел2"
 //#define KOTEL2_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
@@ -74,34 +80,32 @@ typedef enum {
 kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - дизельный, 2 - электрический
 
 #define CFG_INDEX_WORK_MODE 0
-#define VALDES_INDEX_WORK_MODE 0 
-
 #define CFG_INDEX_THERMO_ENABLED 1
-#define VALDES_INDEX_THERMO_ENABLED 1 
-
 #define CFG_INDEX_THERMO_PERIOD 2
-#define VALDES_INDEX_THERMO_PERIOD -1 
-
 #define CFG_INDEX_THERMO_HYSTERESIS 3
-#define VALDES_INDEX_THERMO_HYSTERESIS -1 
-
 #define CFG_INDEX_THERMO_TEMPSET 4
-#define VALDES_INDEX_THERMO_TEMPSET 2
-
 #define CFG_INDEX_PUMP_DELAY 5
-#define VALDES_INDEX_PUMP_DELAY -1
-
 #define CFG_INDEX_SCHEDULE_ENABLED 6
-#define VALDES_INDEX_SCHEDULE_ENABLED 2
-
 #define CFG_TEMPSET_SCHEDULE_START_IDX 7
+
+#define VALDES_INDEX_WORK_MODE 0 
+#define VALDES_INDEX_THERMO_ENABLED 1 
+#define VALDES_INDEX_THERMO_PERIOD -1 
+#define VALDES_INDEX_THERMO_HYSTERESIS -1 
+#define VALDES_INDEX_THERMO_TEMPSET 2
+#define VALDES_INDEX_PUMP_DELAY -1
+#define VALDES_INDEX_SCHEDULE_ENABLED 2
 #define VALDES_TEMPSET_SCHEDULE_START_IDX -1
+
 #define CFG_TEMPSET_SCHEDULE_COUNT 5
 
 uint8_t work_mode = 0; // режим работы (cfg0)
+
+#ifdef PUMP_DELAY
 uint16_t pump_delay = 300;
 uint8_t is_pump_active = 0;
 os_timer_t pump_timer;
+#endif
 
 uint8_t kotel_gpio = 255;
 uint16_t global_tempset = THERMOSTAT_TEMPSET;
@@ -291,7 +295,7 @@ int8_t ICACHE_FLASH_ATTR get_schedule_index()
     return idx;
 }
 
-
+#ifdef PUMP_DELAY
 void ICACHE_FLASH_ATTR reset_pump_cb(){
     is_pump_active = 0;
 }
@@ -302,6 +306,7 @@ void ICACHE_FLASH_ATTR start_pump_timer(){
     os_timer_setfn( &pump_timer, (os_timer_func_t *)reset_pump_cb, NULL);
     os_timer_arm( &pump_timer, pump_delay * 1000, 0);    
 }
+#endif
 
 kotel_type_t ICACHE_FLASH_ATTR set_active_kotel()
 {
@@ -320,18 +325,23 @@ kotel_type_t ICACHE_FLASH_ATTR set_active_kotel()
             _kotel = KOTEL_1; 
             kotel_gpio = KOTEL1_GPIO;
             
-            #ifdef KOTEL2_NIGHT_MODE_GPIO
-                GPIO_ALL(KOTEL2_NIGHT_MODE_GPIO, GPIO_OFF);
-            #endif
+            #ifdef KOTEL2_GPIO
+                #ifdef KOTEL2_NIGHT_MODE_GPIO
+                    GPIO_ALL(KOTEL2_NIGHT_MODE_GPIO, GPIO_OFF);
+                #endif
 
-            uint8_t kotel2_gpio_state = GPIO_ALL_GET(KOTEL2_GPIO);
-            if ( kotel2_gpio_state )
-            {
-                start_pump_timer();
-            }
-            GPIO_ALL(KOTEL2_GPIO, GPIO_OFF);
-            
-        } else {
+                uint8_t kotel2_gpio_state = GPIO_ALL_GET(KOTEL2_GPIO);
+                if ( kotel2_gpio_state )
+                {
+                    #ifdef PUMP_DELAY
+                    start_pump_timer();
+                    #endif
+                }
+                GPIO_ALL(KOTEL2_GPIO, GPIO_OFF);
+            #endif
+        }
+        #ifdef KOTEL2_GPIO 
+        else {
             // ночь, Т2
             _kotel = KOTEL_2; 
             kotel_gpio = KOTEL2_GPIO;
@@ -342,15 +352,19 @@ kotel_type_t ICACHE_FLASH_ATTR set_active_kotel()
             
             GPIO_ALL(KOTEL1_GPIO, GPIO_OFF);
         }   
+        #endif
     } else if ( work_mode == 2 ) {
         // принудительная работа котла 1 по термостату, котел2 не используется
         _kotel = KOTEL_1;
         kotel_gpio = KOTEL1_GPIO;
-    } else if ( work_mode == 3 ) {
+    } 
+    #ifdef KOTEL2_GPIO
+    else if ( work_mode == 3 ) {
         // принудительная работа котла 2 по термостату, котел1 не используется
         _kotel = KOTEL_2;
         kotel_gpio = KOTEL2_GPIO;
     }
+    #endif
 
     return _kotel;
 }
@@ -360,14 +374,22 @@ void ICACHE_FLASH_ATTR load_off(void *args)
     // функция отключения нагрузки
     //GPIO_ALL_M(kotel_gpio, GPIO_OFF);
     GPIO_ALL(kotel_gpio, GPIO_OFF);
-    if ( kotel_gpio == KOTEL2_GPIO ) start_pump_timer();
+    #ifdef KOTEL2_GPIO
+    if ( kotel_gpio == KOTEL2_GPIO ) {
+        #ifdef PUMP_DELAY
+        start_pump_timer();
+        #endif
+    }
+    #endif
 }
 
 void ICACHE_FLASH_ATTR load_on(void *args)
 {
     // функция включения нагрузки
     //GPIO_ALL_M(kotel_gpio, GPIO_ON);  
+    #ifdef PUMP_DELAY
     if ( kotel_gpio == KOTEL1_GPIO && is_pump_active ) return; // следующий запуск по термостату должен включить, т.к. к тому времени флаг должен быть сброшен
+    #endif
     GPIO_ALL(kotel_gpio, GPIO_ON);   
 }
 
@@ -459,9 +481,11 @@ void ICACHE_FLASH_ATTR handle_params() {
     need_save |= handle_config_param(CFG_INDEX_THERMO_TEMPSET,          VALDES_INDEX_THERMO_TEMPSET,            &val,         THERMOSTAT_TEMPSET, 50, 300);
     global_tempset = val;
 
+    #ifdef PUMP_DELAY
     val = pump_delay;
     need_save |= handle_config_param(CFG_INDEX_PUMP_DELAY,  VALDES_INDEX_PUMP_DELAY,    &val,    PUMP_DELAY, 0, 1200);
     pump_delay = val;
+    #endif
 
     val = schedule_enabled;
     need_save |= handle_config_param(CFG_INDEX_SCHEDULE_ENABLED,  VALDES_INDEX_SCHEDULE_ENABLED,    &val,    0, 0, 2);
@@ -539,6 +563,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 void webfunc(char *pbuf) 
 {
     int8_t schedule_idx = get_schedule_index();
+    uint16_t local_minutes = time_loc.hour*60 + time_loc.min;
 
     //********************************************************************************************
     os_sprintf(HTTPBUFF,"<div class='blk'>");
@@ -553,16 +578,19 @@ void webfunc(char *pbuf)
     */
     os_sprintf(HTTPBUFF, "<div class='flr'>");
     uint8_t gpio_st = GPIO_ALL_GET(KOTEL1_GPIO);
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k kk fll'>%s</div></a>"
                             , KOTEL1_GPIO
                             , gpio_st
                             , KOTEL1_NAME);
 
+    #ifdef KOTEL2_GPIO
     gpio_st = GPIO_ALL_GET(KOTEL2_GPIO);
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k kk fll'>%s</div></a>"
                             , KOTEL2_GPIO
                             , gpio_st
                             , KOTEL2_NAME);
+    #endif
+
     os_sprintf(HTTPBUFF, "</div>");  // <div class='flr'>
     os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
     //********************************************************************************************
@@ -581,14 +609,18 @@ void webfunc(char *pbuf)
         os_sprintf(HTTPBUFF,"<br>Режим: -------"); 
     */
     os_sprintf(HTTPBUFF, "<div class='flr'>");
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,0)'><div class='g_%d k fll v00' id='v00' style='width:60px'>Ручной</div></a>", work_mode == 0);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,1)'><div class='g_%d k fll v00' id='v01' style='width:60px'>Авто</div></a>", work_mode == 1);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,2)'><div class='g_%d k fll v00' id='v02' style='width:60px'>Котел 1</div></a>", work_mode == 2);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,3)'><div class='g_%d k fll v00' id='v03' style='width:60px'>Котел 2</div></a>", work_mode == 3);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,0)'><div class='g_%d k kk fll v00' id='v00'>Ручной</div></a>", work_mode == 0);
+    #ifdef KOTEL2_GPIO
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,1)'><div class='g_%d k kk fll v00' id='v01'>Авто</div></a>", work_mode == 1);
+    #endif
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,2)'><div class='g_%d k kk fll v00' id='v02'>%s</div></a>", work_mode == 2, KOTEL1_NAME);
+    #ifdef KOTEL2_GPIO
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,3)'><div class='g_%d k kk fll v00' id='v03'>%s</div></a>", work_mode == 3, KOTEL2_NAME);
+    #endif
 
     #ifdef KOTEL2_NIGHT_MODE_GPIO
     gpio_st = GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO);
-    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
+    os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k kk fll'>%s</div></a>"
                             , KOTEL2_NIGHT_MODE_GPIO
                             , gpio_st
                             , "Ночной режим");
@@ -598,21 +630,84 @@ void webfunc(char *pbuf)
     os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
     //********************************************************************************************
     os_sprintf(HTTPBUFF,"<div class='blk'>");
-    os_sprintf(HTTPBUFF,"<div class='fll'>Термостат: %s</div>", thermo->enabled ? "Вкл" : "Выкл"); 
-    os_sprintf(HTTPBUFF,"<div class='flr'>Состояние: %s</div>", thermo->state ? "Нагрев" : "Ожидание"); 
-    
-    if ( schedule_idx == -1 ) {
-        os_sprintf(HTTPBUFF,"<div class='fll'>Глобальная Уставка: %d.%d °C</div>", (uint16_t)(global_tempset / 10), global_tempset % 10); 
-    } else {
-        os_sprintf(HTTPBUFF,"<div class='fll'>Текущая Уставка: %d.%d °C</div>", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
-    }
-    os_sprintf(HTTPBUFF,"<div class='flr'>Температура: %d.%d °C</div>", (int16_t)(thermo->value / 10), thermo->value % 10); 
+    os_sprintf(HTTPBUFF,"<div class='fll t1'>");
+        // данные термостата
+        os_sprintf(HTTPBUFF,"<div>Термостат: <b>%s</b></div>", thermo->enabled ? "Вкл" : "Выкл"); 
+        os_sprintf(HTTPBUFF,"<div>Состояние: <b>%s</b></div>", thermo->state ? "Нагрев" : "Ожидание"); 
+
+        if ( schedule_idx == -1 ) {
+            os_sprintf(HTTPBUFF,"<div>Глобальная Уставка: <b>%d.%d °C</b></div>", (uint16_t)(global_tempset / 10), global_tempset % 10); 
+        } else {
+            os_sprintf(HTTPBUFF,"<div>Текущая Уставка: <b>%d.%d °C</b></div>", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
+        }
+        
+        os_sprintf(HTTPBUFF,"<div>Температура: <b>%d.%d °C</b></div>", (int16_t)(thermo->value / 10), thermo->value % 10);
+
+        #ifdef PUMP_DELAY
+        os_sprintf(HTTPBUFF,"<div>");
+        os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): %s</span>", pump_delay, is_pump_active ? "<b>Да</b>" : "Нет"); 
+        os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+        #endif         
+
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='fll t1'> 
+
+    os_sprintf(HTTPBUFF,"<div class='flr t2'>");
+        // данные расписание
+
+        os_sprintf(HTTPBUFF,"<div class='blk'>");
+        os_sprintf(HTTPBUFF,"<div class='fll'>Расписание: "); 
+        //os_sprintf(HTTPBUFF,"%s</p>", schedule_enabled ? "Вкл" : "Выкл"); 
+        os_sprintf(HTTPBUFF,"</div>"); 
+        os_sprintf(HTTPBUFF,"<div class='fll'>"); 
+        os_sprintf(HTTPBUFF, "<a id='ushd' href='#' data-val='%d' onclick='schd(%d,this.dataset.val)'><div class='g_%d k kk fll' id='sched' data-text='%s'>%s</div></a>"
+                            , !schedule_enabled
+                            , VALDES_INDEX_SCHEDULE_ENABLED
+                            , schedule_enabled
+                            , schedule_enabled ? "Выкл" : "Вкл" //обратное значение, подставится после нажатия
+                            , schedule_enabled ? "Вкл" : "Выкл"
+                            );
+        os_sprintf(HTTPBUFF,"</div>");  // <div class='fll'>
+        os_sprintf(HTTPBUFF,"</div>");  // <div class='blk'>
+        
+
+
+        //if ( schedule_enabled ) {
+            os_sprintf(HTTPBUFF,"<table id='tshd'>"); 
+            os_sprintf(HTTPBUFF,"<tr><th>#</th><th>Время</th><th>Уставка</th></tr>"); 
+            uint8_t i;
+            for (i=0; i < CFG_TEMPSET_SCHEDULE_COUNT; i++)
+            {
+            
+                uint16_t schedule_minutes = schedules_tempset[i].hour*60 + schedules_tempset[i].min;
+                uint16_t schedule_minutes_next = 23*60+59;
+                uint16_t schedule_minutes_prev = 0;
+                if ( i > 0 ) schedule_minutes_prev = schedules_tempset[i-1].hour*60 + schedules_tempset[i-1].min;
+                if ( i <= CFG_TEMPSET_SCHEDULE_COUNT-2 ) schedule_minutes_next = schedules_tempset[i+1].hour*60 + schedules_tempset[i+1].min;
+
+
+                os_sprintf(HTTPBUFF,"<tr %s><td>%d.%s</td><td>&nbsp;с %02d:%02d</td><td>&nbsp;%d.%d °C</td></tr>" //<td>%d -> %d <- %d</td></tr>"
+                        , schedule_idx == i  ? "class='sr'" : ""
+                        , i+1
+                        , schedule_idx == i  ? "&nbsp;&#10148;" : ""
+                        , schedules_tempset[i].hour
+                        , schedules_tempset[i].min
+                        , (uint16_t)(schedules_tempset[i].tempset / 10)
+                        , schedules_tempset[i].tempset % 10 
+                        //, schedule_idx == i ? "активно" : ""
+                        //, schedule_minutes
+                        //, local_minutes
+                        //, schedule_minutes_next
+                        ); 
+            }
+
+            os_sprintf(HTTPBUFF,"</table>"); 
+        //}
+
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='flr t2'>
     os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
     //********************************************************************************************   
     
-    os_sprintf(HTTPBUFF,"<div class='blk'>");
-    os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): %s</span>", pump_delay, is_pump_active ? "Да" : "Нет"); 
-    os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+
     //********************************************************************************************   
 
 
@@ -622,52 +717,9 @@ void webfunc(char *pbuf)
 
     
 
-    uint16_t local_minutes = time_loc.hour*60 + time_loc.min;
+    
  
-    os_sprintf(HTTPBUFF,"<div class='blk'>");
-    os_sprintf(HTTPBUFF,"<div class='fll'>Расписание: "); 
-    //os_sprintf(HTTPBUFF,"%s</p>", schedule_enabled ? "Вкл" : "Выкл"); 
-    os_sprintf(HTTPBUFF,"</div>"); 
-    os_sprintf(HTTPBUFF,"<div class='fll'>"); 
-    os_sprintf(HTTPBUFF, "<a id='ushd' href='#' data-val='%d' onclick='schd(%d,this.dataset.val)'><div class='g_%d k fll' id='sched' data-text='%s' style='width:60px'>%s</div></a>"
-                        , !schedule_enabled
-                        , VALDES_INDEX_SCHEDULE_ENABLED
-                        , schedule_enabled
-                        , schedule_enabled ? "Выкл" : "Вкл" //обратное значение, подставится после нажатия
-                        , schedule_enabled ? "Вкл" : "Выкл"
-                        );
-    os_sprintf(HTTPBUFF,"</div>");  // <div class='fll'>
-    os_sprintf(HTTPBUFF,"</div>");  // <div class='blk'>
-    //if ( schedule_enabled ) {
-        os_sprintf(HTTPBUFF,"<table id='tshd'>"); 
-        os_sprintf(HTTPBUFF,"<tr><th>#</th><th>Время</th><th>Уставка</th></tr>"); 
-        uint8_t i;
-        for (i=0; i < CFG_TEMPSET_SCHEDULE_COUNT; i++)
-        {
-           
-            uint16_t schedule_minutes = schedules_tempset[i].hour*60 + schedules_tempset[i].min;
-            uint16_t schedule_minutes_next = 23*60+59;
-            uint16_t schedule_minutes_prev = 0;
-            if ( i > 0 ) schedule_minutes_prev = schedules_tempset[i-1].hour*60 + schedules_tempset[i-1].min;
-            if ( i <= CFG_TEMPSET_SCHEDULE_COUNT-2 ) schedule_minutes_next = schedules_tempset[i+1].hour*60 + schedules_tempset[i+1].min;
 
-
-            os_sprintf(HTTPBUFF,"<tr %s><td>%d.</td><td>&nbsp;с %02d:%02d</td><td>&nbsp;%d.%d °C</td><td>%s</td></tr>" //<td>%d -> %d <- %d</td></tr>"
-                    , schedule_idx == i  ? "style='color: red'" : ""
-                    , i+1
-                    , schedules_tempset[i].hour
-                    , schedules_tempset[i].min
-                    , (uint16_t)(schedules_tempset[i].tempset / 10)
-                    , schedules_tempset[i].tempset % 10 
-                    , schedule_idx == i ? "активно" : ""
-                    //, schedule_minutes
-                    //, local_minutes
-                    //, schedule_minutes_next
-                    ); 
-        }
-
-        os_sprintf(HTTPBUFF,"</table>"); 
-    //}
     //********************************************************************************************
     os_sprintf(HTTPBUFF,"<div class=flr'><small>Прошивка: %s</small></div>", FW_VER); 
 
@@ -685,7 +737,14 @@ void webfunc(char *pbuf)
                                    "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
                                 "}"
                             "let stl = document.createElement('style');"
-                            "stl.innerText = \".blk{float: none;display: flex;padding: 6px 0px;} .flr{float: right;} #tshd{display: table;}}\";"
+                            "stl.innerText = \".blk{float:none;display:flex;padding:6px 0px;} "
+                                              ".flr{float:right;} "
+                                              "#tshd{display:table;} "
+                                              ".t1{width:60%%;} "
+                                              ".t2{width:40%%;} "
+                                              ".sr{font-weight:bold;color:red;} "
+                                              ".kk{border-radius:4px;margin-left:4px;width:40px;} "
+                                              "\";"
                             "document.head.appendChild(stl);"
                         "};"
 
