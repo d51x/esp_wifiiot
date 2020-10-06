@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.73"
+#define FW_VER "1.81"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -20,6 +20,11 @@ cfg4 (valdes2)   глобальная устав, принимаем из вне
 
 cfg5    задержка выключения насоса котла2, сек,      котел 1 не должен включаться столько времени, после выключения котла 2
 cfg6    расписание (0 - используется, 1 - не используется)
+
+!!!!! в функции get_temp() можно описать свою логику вычисления температуры.
+      можно указать просто значение датчика data1wire[X], или dht_tX, или другой датчик
+      или вообще брать среднюю температуру с нескольких датчиков
+      или брать минимальную температуру с нескольких датчиков
 
 !!!!! для расписания доступно 5 временных интервалов, их можно увеличить (до 7) или уменьшить через CFG_TEMPSET_SCHEDULE_COUNT
 !!!!! если используете расписание, то необходимо заполнять все временные интервалы и уставки
@@ -122,6 +127,28 @@ typedef struct schedules_tempset {
 
 schedules_tempset_t schedules_tempset[CFG_TEMPSET_SCHEDULE_COUNT];
 uint8_t schedule_enabled = 0;
+
+#define TEMP_DELTA 10
+int16_t temperature = 0;
+int16_t temp_prev = 2550;
+int16_t ICACHE_FLASH_ATTR get_temp() 
+{
+    int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
+
+    _temp =  vsens[0][0];
+
+    //******* работаем по средней температуре
+    //_temp = (_temp + vsens[1][1]) / 2;
+    //_temp = (_temp + vsens[1][2]) / 2;
+    //****************************************
+
+    //******* работаем по минимальной  температуре
+    _temp = ( _temp < vsens[1][0] ) ? _temp : vsens[1][0];
+    _temp = ( _temp < vsens[2][0] ) ? _temp : vsens[2][0];
+    //****************************************
+
+    return _temp;
+}
 
 //************************ объект Термостат и функции ***********************************************************
 typedef void (* func_therm)(void *args);  
@@ -252,16 +279,6 @@ void ICACHE_FLASH_ATTR thermostat_set_period(thermostat_handle_t thermo_h, uint8
 
 thermostat_handle_t thermo_h;
 thermostat_t *thermo;
-
-int16_t ICACHE_FLASH_ATTR get_temp() 
-{
-    int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
-    _temp = vsens[1][0];
-    //vsens[1][1]
-    //vsens[2][1]
-    //vsens[3][1]
-    return _temp;
-}
 
 int8_t ICACHE_FLASH_ATTR get_schedule_index() 
 {
@@ -518,31 +535,36 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
         handle_params();
     //}
 
-    // управление состоянием термостата
-    if ( work_mode == 0)  {
-        // термостат недоступен
-        thermostat_disable(thermo_h);
-    } else {
-        thermostat_enable(thermo_h);
-
-        // вычисление уставки по расписанию, если не найдено расписание или отключено, то используется глобальная уставка
-        int8_t schedule_idx = get_schedule_index();
-
-        if ( schedule_idx >= 0)
-            thermostat_set_tempset(thermo_h, schedules_tempset[schedule_idx].tempset);    
-        else
-            thermostat_set_tempset(thermo_h, global_tempset);        
-    }    
+    
+ 
 
     if ( timersrc > 60 ) {
-        // определение активного котла
+
+        // управление состоянием термостата
+        if ( work_mode == 0)  {
+            // термостат недоступен
+            thermostat_disable(thermo_h);
+        } else {
+            thermostat_enable(thermo_h);
+
+            // вычисление уставки по расписанию, если не найдено расписание или отключено, то используется глобальная уставка
+            int8_t schedule_idx = get_schedule_index();
+
+            if ( schedule_idx >= 0)
+                thermostat_set_tempset(thermo_h, schedules_tempset[schedule_idx].tempset);    
+            else
+                thermostat_set_tempset(thermo_h, global_tempset);        
+        }   
+
+        // определение активного 
+        temperature = get_temp();
         active_kotel = set_active_kotel();
+        thermostat_set_value(thermo_h, temperature);
 
         if ( thermo->enabled && timersrc % thermo->period == 0 )
         {
             // сработка термостата с заданным интервалом
-            int16_t temp = get_temp();
-            thermostat_set_value(thermo_h, temp);
+            
             thermostat_process(thermo_h);
         }
 
@@ -636,16 +658,17 @@ void webfunc(char *pbuf)
         os_sprintf(HTTPBUFF,"<div>Состояние: <b>%s</b></div>", thermo->state ? "Нагрев" : "Ожидание"); 
 
         if ( schedule_idx == -1 ) {
-            os_sprintf(HTTPBUFF,"<div>Глобальная Уставка: <b>%d.%d °C</b></div>", (uint16_t)(global_tempset / 10), global_tempset % 10); 
+            os_sprintf(HTTPBUFF,"<div>Уставка глобальная: <b>%d.%d °C</b></div>", (uint16_t)(global_tempset / 10), global_tempset % 10); 
         } else {
-            os_sprintf(HTTPBUFF,"<div>Текущая Уставка: <b>%d.%d °C</b></div>", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
+            os_sprintf(HTTPBUFF,"<div>Уставка расписание: <b>%d.%d °C</b></div>", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
         }
-        
+
+        os_sprintf(HTTPBUFF,"<div>Гистерезис: <b>%d.%d °C</b></div>", (int16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10);
         os_sprintf(HTTPBUFF,"<div>Температура: <b>%d.%d °C</b></div>", (int16_t)(thermo->value / 10), thermo->value % 10);
 
         #ifdef PUMP_DELAY
         os_sprintf(HTTPBUFF,"<div>");
-        os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): %s</span>", pump_delay, is_pump_active ? "<b>Да</b>" : "Нет"); 
+        os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): <b>%s</b></span>", pump_delay, is_pump_active ? "Да" : "Нет"); 
         os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
         #endif         
 
@@ -743,7 +766,7 @@ void webfunc(char *pbuf)
                                               ".t1{width:60%%;} "
                                               ".t2{width:40%%;} "
                                               ".sr{font-weight:bold;color:red;} "
-                                              ".kk{border-radius:4px;margin-left:4px;width:40px;} "
+                                              ".kk{border-radius:4px;margin-left:4px;width:60px;} "
                                               "\";"
                             "document.head.appendChild(stl);"
                         "};"
