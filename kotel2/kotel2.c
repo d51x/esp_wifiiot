@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.44"
+#define FW_VER "1.65"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -44,10 +44,12 @@ cfg16	уставка для Т5
 
 #define KOTEL_NONE_NAME "--------"
 #define KOTEL1_GPIO 15 // kiturami
-#define KOTEL1_NAME "дизельный"
+//#define KOTEL1_NAME "дизельный"
+#define KOTEL1_NAME "Котел1"
 //#define KOTEL2_GPIO 14 // protherm
 #define KOTEL2_GPIO 13 // protherm
-#define KOTEL2_NAME "электрический"
+//#define KOTEL2_NAME "электрический"
+#define KOTEL2_NAME "Котел2"
 //#define KOTEL2_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
 
 #define KOTEL2_NIGHT_MODE_GPIO 2  // ESC режим для Протерма
@@ -90,7 +92,7 @@ kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - 
 #define VALDES_INDEX_PUMP_DELAY -1
 
 #define CFG_INDEX_SCHEDULE_ENABLED 6
-#define VALDES_INDEX_SCHEDULE_ENABLED -1
+#define VALDES_INDEX_SCHEDULE_ENABLED 2
 
 #define CFG_TEMPSET_SCHEDULE_START_IDX 7
 #define VALDES_TEMPSET_SCHEDULE_START_IDX -1
@@ -276,7 +278,8 @@ int8_t ICACHE_FLASH_ATTR get_schedule_index()
 
         bool is_active = local_minutes >= schedule_minutes
                         && local_minutes > schedule_minutes_prev
-                        && local_minutes < schedule_minutes_next;
+                        && local_minutes < schedule_minutes_next
+                        && schedule_minutes != 24*60;
 
         if ( is_active )
         {
@@ -486,10 +489,10 @@ void ICACHE_FLASH_ATTR handle_params() {
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) 
 {
-    if ( timersrc % 5 == 0 )
-    {
+    //if ( timersrc % 5 == 0 )
+    //{
         handle_params();
-    }
+    //}
 
     // управление состоянием термостата
     if ( work_mode == 0)  {
@@ -535,15 +538,20 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 
 void webfunc(char *pbuf) 
 {
-    os_sprintf(HTTPBUFF,"<br>Активный котел: ");
+    int8_t schedule_idx = get_schedule_index();
+
+    //********************************************************************************************
+    os_sprintf(HTTPBUFF,"<div class='blk'>");
+    os_sprintf(HTTPBUFF,"<div class='fll'>Активный котел:</div>");
+    /*
     if ( active_kotel == KOTEL_1 )
         os_sprintf(HTTPBUFF, KOTEL1_NAME);
     else if ( active_kotel == KOTEL_2 )
         os_sprintf(HTTPBUFF, KOTEL2_NAME);
     else 
         os_sprintf(HTTPBUFF, KOTEL_NONE_NAME);
-
-    os_sprintf(HTTPBUFF, "<div>");
+    */
+    os_sprintf(HTTPBUFF, "<div class='flr'>");
     uint8_t gpio_st = GPIO_ALL_GET(KOTEL1_GPIO);
     os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
                             , KOTEL1_GPIO
@@ -555,9 +563,12 @@ void webfunc(char *pbuf)
                             , KOTEL2_GPIO
                             , gpio_st
                             , KOTEL2_NAME);
-    os_sprintf(HTTPBUFF, "</div>");
-
-    os_sprintf(HTTPBUFF,"<br>Режим: "); 
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='flr'>
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+    //********************************************************************************************
+    os_sprintf(HTTPBUFF,"<div class='blk'>");
+    os_sprintf(HTTPBUFF,"<div class='fll'>Режим: </div>"); 
+    /*
     if (work_mode == 0)
         os_sprintf(HTTPBUFF,"Ручной"); 
     else if ( work_mode == 1)
@@ -568,49 +579,67 @@ void webfunc(char *pbuf)
         os_sprintf(HTTPBUFF,"всегда %s", KOTEL2_NAME); 
     else
         os_sprintf(HTTPBUFF,"<br>Режим: -------"); 
-
-    os_sprintf(HTTPBUFF, "<div>");
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,1)'><div class='g_%d k fll v00' id='v01' style='width:60px'>Авто</div></a>", work_mode == 1);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,2)'><div class='g_%d k fll v00' id='v02' style='width:60px'>Котел 1</div></a>", work_mode == 2);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,0)'><div class='g_%d k fll v00' id='v00' style='width:60px'>Ручной</div></a>", work_mode == 0);
-    os_sprintf(HTTPBUFF, "<a href='#' onclick='valdes(0,3)'><div class='g_%d k fll v00' id='v03' style='width:60px'>Котел 2</div></a>", work_mode == 3);
-    os_sprintf(HTTPBUFF, "</div>");
-
-    os_sprintf(HTTPBUFF,"<br>Термостат: %s", thermo->enabled ? "Вкл" : "Выкл"); 
-    os_sprintf(HTTPBUFF,"<br>Состояние: %s", thermo->state ? "Нагрев" : "Ожидание"); 
-    os_sprintf(HTTPBUFF,"<br>Выбег насоса (%d сек): %s", pump_delay, is_pump_active ? "Да" : "Нет"); 
-
-    #ifdef KOTEL2_NIGHT_MODE_GPIO
-    os_sprintf(HTTPBUFF,"<br>Режим ESC: %s", GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO) ? "Да" : "Нет"); 
-    #endif
+    */
+    os_sprintf(HTTPBUFF, "<div class='flr'>");
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,0)'><div class='g_%d k fll v00' id='v00' style='width:60px'>Ручной</div></a>", work_mode == 0);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,1)'><div class='g_%d k fll v00' id='v01' style='width:60px'>Авто</div></a>", work_mode == 1);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,2)'><div class='g_%d k fll v00' id='v02' style='width:60px'>Котел 1</div></a>", work_mode == 2);
+    os_sprintf(HTTPBUFF, "<a href='#' onclick='wmode(0,3)'><div class='g_%d k fll v00' id='v03' style='width:60px'>Котел 2</div></a>", work_mode == 3);
 
     #ifdef KOTEL2_NIGHT_MODE_GPIO
     gpio_st = GPIO_ALL_GET(KOTEL2_NIGHT_MODE_GPIO);
-    os_sprintf(HTTPBUFF, "<div>");
     os_sprintf(HTTPBUFF,"<a href='?gpio=%d'><div class='g_%d k fll' style='width:100px'>%s</div></a>"
                             , KOTEL2_NIGHT_MODE_GPIO
                             , gpio_st
                             , "Ночной режим");
-    os_sprintf(HTTPBUFF, "</div>");
     #endif
 
-    os_sprintf(HTTPBUFF,"<br>Период: %d сек", thermo->period); 
-    os_sprintf(HTTPBUFF,"<br>Глобальная Уставка: %d.%d °C", (uint16_t)(global_tempset / 10), global_tempset % 10); 
-    os_sprintf(HTTPBUFF,"<br>Текущая Уставка: %d.%d °C", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
-    os_sprintf(HTTPBUFF,"<br>Гистерезис: %d.%d °C", (uint16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10); 
-    os_sprintf(HTTPBUFF,"<br>Комната: %d.%d °C", (int16_t)(thermo->value / 10), thermo->value % 10); 
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='flr'>
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+    //********************************************************************************************
+    os_sprintf(HTTPBUFF,"<div class='blk'>");
+    os_sprintf(HTTPBUFF,"<div class='fll'>Термостат: %s</div>", thermo->enabled ? "Вкл" : "Выкл"); 
+    os_sprintf(HTTPBUFF,"<div class='flr'>Состояние: %s</div>", thermo->state ? "Нагрев" : "Ожидание"); 
     
-    os_sprintf(HTTPBUFF,"<br><br>Улица: %d.%d °C", (int16_t)(vsens[3][0] / 10), vsens[3][0] % 10); 
+    if ( schedule_idx == -1 ) {
+        os_sprintf(HTTPBUFF,"<div class='fll'>Глобальная Уставка: %d.%d °C</div>", (uint16_t)(global_tempset / 10), global_tempset % 10); 
+    } else {
+        os_sprintf(HTTPBUFF,"<div class='fll'>Текущая Уставка: %d.%d °C</div>", (uint16_t)(thermo->tempset / 10), thermo->tempset % 10); 
+    }
+    os_sprintf(HTTPBUFF,"<div class='flr'>Температура: %d.%d °C</div>", (int16_t)(thermo->value / 10), thermo->value % 10); 
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+    //********************************************************************************************   
+    
+    os_sprintf(HTTPBUFF,"<div class='blk'>");
+    os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): %s</span>", pump_delay, is_pump_active ? "Да" : "Нет"); 
+    os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
+    //********************************************************************************************   
 
-    int8_t schedule_idx = get_schedule_index();
+
+    //os_sprintf(HTTPBUFF,"<br>Период: %d сек", thermo->period); 
+    //os_sprintf(HTTPBUFF,"<br>Гистерезис: %d.%d °C", (uint16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10); 
+    //os_sprintf(HTTPBUFF,"<br><br>Улица: %d.%d °C", (int16_t)(vsens[3][0] / 10), vsens[3][0] % 10); 
+
+    
 
     uint16_t local_minutes = time_loc.hour*60 + time_loc.min;
  
-    os_sprintf(HTTPBUFF,"<br><br>Расписание: "); 
-    os_sprintf(HTTPBUFF,"%s", schedule_enabled ? "Вкл" : "Выкл"); 
-
+    os_sprintf(HTTPBUFF,"<div class='blk'>");
+    os_sprintf(HTTPBUFF,"<div class='fll'>Расписание: "); 
+    //os_sprintf(HTTPBUFF,"%s</p>", schedule_enabled ? "Вкл" : "Выкл"); 
+    os_sprintf(HTTPBUFF,"</div>"); 
+    os_sprintf(HTTPBUFF,"<div class='fll'>"); 
+    os_sprintf(HTTPBUFF, "<a id='ushd' href='#' data-val='%d' onclick='schd(%d,this.dataset.val)'><div class='g_%d k fll' id='sched' data-text='%s' style='width:60px'>%s</div></a>"
+                        , !schedule_enabled
+                        , VALDES_INDEX_SCHEDULE_ENABLED
+                        , schedule_enabled
+                        , schedule_enabled ? "Выкл" : "Вкл" //обратное значение, подставится после нажатия
+                        , schedule_enabled ? "Вкл" : "Выкл"
+                        );
+    os_sprintf(HTTPBUFF,"</div>");  // <div class='fll'>
+    os_sprintf(HTTPBUFF,"</div>");  // <div class='blk'>
     //if ( schedule_enabled ) {
-        os_sprintf(HTTPBUFF,"<table>"); 
+        os_sprintf(HTTPBUFF,"<table id='tshd'>"); 
         os_sprintf(HTTPBUFF,"<tr><th>#</th><th>Время</th><th>Уставка</th></tr>"); 
         uint8_t i;
         for (i=0; i < CFG_TEMPSET_SCHEDULE_COUNT; i++)
@@ -623,7 +652,7 @@ void webfunc(char *pbuf)
             if ( i <= CFG_TEMPSET_SCHEDULE_COUNT-2 ) schedule_minutes_next = schedules_tempset[i+1].hour*60 + schedules_tempset[i+1].min;
 
 
-            os_sprintf(HTTPBUFF,"<tr %s><td>%d.</td><td>&nbsp;с %02d:%02d</td><td>&nbsp;%d.%d °C</td><td>%s</td><td>%d -> %d <- %d</td></tr>"
+            os_sprintf(HTTPBUFF,"<tr %s><td>%d.</td><td>&nbsp;с %02d:%02d</td><td>&nbsp;%d.%d °C</td><td>%s</td></tr>" //<td>%d -> %d <- %d</td></tr>"
                     , schedule_idx == i  ? "style='color: red'" : ""
                     , i+1
                     , schedules_tempset[i].hour
@@ -631,30 +660,59 @@ void webfunc(char *pbuf)
                     , (uint16_t)(schedules_tempset[i].tempset / 10)
                     , schedules_tempset[i].tempset % 10 
                     , schedule_idx == i ? "активно" : ""
-                    , schedule_minutes
-                    , local_minutes
-                    , schedule_minutes_next); 
+                    //, schedule_minutes
+                    //, local_minutes
+                    //, schedule_minutes_next
+                    ); 
         }
 
         os_sprintf(HTTPBUFF,"</table>"); 
     //}
-    os_sprintf(HTTPBUFF,"<br><small>Прошивка: %s</small>", FW_VER); 
+    //********************************************************************************************
+    os_sprintf(HTTPBUFF,"<div class=flr'><small>Прошивка: %s</small></div>", FW_VER); 
 
     os_sprintf(HTTPBUFF, "<script type='text/javascript'>"
 
-                        "window.onload = function(){"
-                        " let gg = document.getElementsByClassName(\"h\")[1];"
-                        " if ( gg.innerHTML == \"GPIO:\")"
-                        " { gg.style.display=\"none\";"
-                        "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
-                        "} "
-                        "}; "
-                        "function valdes(idx,value){"
-                        "ajax_request(\"/valdes?int=\" + idx + \"&set=\" + value, function(res){ let vals = document.getElementsByClassName('v0' + idx);"
-                        "for  (let i=0;i<vals.length;i++){vals[i].classList.remove(\"g_1\");vals[i].classList.add(\"g_0\");}"
-                        "document.getElementById('v0'+ value).classList.add(\"g_1\");"
-                        "});"
-                        "}"
+                        "window.onload = function()"
+                        "{"
+                            " let gg = document.getElementsByClassName(\"h\");"
+                            " if ( gg[0].innerHTML == \"Sensors:\")"
+                            "{"
+                                "gg[0].innerHTML = 'Управление котлами:';"
+                            "}"
+                            " if ( gg[1].innerHTML == \"GPIO:\")"
+                                " { gg[1].style.display=\"none\";"
+                                   "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
+                                "}"
+                            "let stl = document.createElement('style');"
+                            "stl.innerText = \".blk{float: none;display: flex;padding: 6px 0px;} .flr{float: right;} #tshd{display: table;}}\";"
+                            "document.head.appendChild(stl);"
+                        "};"
+
+                        "function wmode(idx,value){"
+                            "ajax_request('/valdes?int=' + idx + '&set=' + value, function(res){ "
+                                "let vals = document.getElementsByClassName('v0' + idx);"
+                                "for  (let i=0;i<vals.length;i++){vals[i].classList.remove(\"g_1\");vals[i].classList.add(\"g_0\");}"
+                                "document.getElementById('v0'+ value).classList.add(\"g_1\");"
+                            "});"
+                        "};"
+
+                        "function schd(idx, value)"
+                        "{"
+                            "ajax_request('/valdes?int=' + idx + '&set=' + value, function(res)"
+                                "{"
+                                    "var vnew = 1 - parseInt(value);"
+                                    "var sc = document.getElementById('sched');"
+                                    "sc.classList.remove(\"g_\" + vnew);"
+                                    "console.log('value = ' + value);"
+                                    "console.log('!value = ' + vnew);"
+                                    "sc.classList.add(\"g_\" + value);"
+                                    "sc.innerHTML = sc.getAttribute('data-text');"
+                                    "document.getElementById('tshd').style.display = (value) ? \"table\" : \"none\";"
+                                    "document.getElementById('ushd').setAttribute(\"data-val\", vnew);"
+                                "}"
+                            ");"
+                         "};"
                          "</script>"
                          );
 
