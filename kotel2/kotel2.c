@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.81"
+#define FW_VER "1.82"
 /*
 0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
 Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -450,6 +450,16 @@ bool ICACHE_FLASH_ATTR handle_config_param(uint8_t cfg_idx, int8_t valdes_idx, i
     // проверка valdes в первую очередь, могли прийти по http get или по mqtt с внешней системы
     // сравниваем с текущим значением  и меняем его, а так же меняем cfgdes
     // теперь смотрим valdes, поменялось ли там значение
+
+
+    //  а теперь смотрим опцию, поменялось ли там значение
+    val =  (sensors_param.cfgdes[cfg_idx] < min_val || sensors_param.cfgdes[cfg_idx] > max_val) ? def_val : sensors_param.cfgdes[cfg_idx];  
+    if ( val != *param ) {  // значение изменилось, в опции новое значение
+        //memcpy(param, &val, sizeof(int32_t));
+        *param = val;
+        mqtt_send_valuedes(valdes_idx, val);
+    }
+
     if ( valdes_idx >= 0 ) // для переменной используется valdes
     {    
         val = ( valdes[valdes_idx] < min_val || valdes[valdes_idx] > max_val ) ? def_val : valdes[valdes_idx]; // различные проверки, можно убрать
@@ -461,16 +471,6 @@ bool ICACHE_FLASH_ATTR handle_config_param(uint8_t cfg_idx, int8_t valdes_idx, i
             need_save = true;                          // флаг, что надо сохранить изменени опции во флеш
         }  
     }
-
-    //  а теперь смотрим опцию, поменялось ли там значение
-    val =  (sensors_param.cfgdes[cfg_idx] < min_val || sensors_param.cfgdes[cfg_idx] > max_val) ? def_val : sensors_param.cfgdes[cfg_idx];  
-    if ( val != *param ) {  // значение изменилось, в опции новое значение
-        //memcpy(param, &val, sizeof(int32_t));
-        *param = val;
-        mqtt_send_valuedes(valdes_idx, val);
-    }
-
-
     return need_save;  
 }
 
