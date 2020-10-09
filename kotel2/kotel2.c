@@ -2,10 +2,10 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.82"
+#define FW_VER "1.83"
 /*
-0    1        2          3              4           5                   6          7      8        9      10       11     12       13     14       15     16
-Авто,Разрешен,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
+0    1                    2          3              4           5                   6          7      8        9      10       11     12       13     14       15    
+Авто,Источник температуры,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
 используется 2 термостата
 cfg0 (valdes0)   режим работы управления котлами:
     0 - ручной, термостаты не включены, можно кнопками вкл/выкл gpio котлов
@@ -13,13 +13,16 @@ cfg0 (valdes0)   режим работы управления котлами:
     2 - активный котел 1, используется термостат
     3 - активный котел 2, используется термостат
 
-cfg1 (valdes1)   состояние термостата
+cfg1    источник температуры
+        0 - внутренние расчеты через функцию get_temp
+        1 - внешние расчеты и прием через valdes4 из внешней системы
+
 cfg2    период срабатывания термостата в секундах
-cfg3    гистерезис х10
+cfg3    гистерезис х10 (valdes1)
 cfg4 (valdes2)   глобальная устав, принимаем из внешней системы
 
 cfg5    задержка выключения насоса котла2, сек,      котел 1 не должен включаться столько времени, после выключения котла 2
-cfg6    расписание (0 - используется, 1 - не используется)
+cfg6    расписание (0 - используется, 1 - не используется) valdes3
 
 !!!!! в функции get_temp() можно описать свою логику вычисления температуры.
       можно указать просто значение датчика data1wire[X], или dht_tX, или другой датчик
@@ -45,6 +48,14 @@ cfg14	уставка для Т4
 	
 cfg15	часы минуты Т5
 cfg16	уставка для Т5
+
+
+---------------------
+valdes0 - режим работы
+valdes1 - гистерезис
+valdes2 - уставка
+valdes3 - расписание
+valdes4 - внешняя температура
 
 */
 
@@ -85,7 +96,7 @@ typedef enum {
 kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - дизельный, 2 - электрический
 
 #define CFG_INDEX_WORK_MODE 0
-#define CFG_INDEX_THERMO_ENABLED 1
+#define CFG_INDEX_TEMP_SOURCE 1
 #define CFG_INDEX_THERMO_PERIOD 2
 #define CFG_INDEX_THERMO_HYSTERESIS 3
 #define CFG_INDEX_THERMO_TEMPSET 4
@@ -93,14 +104,16 @@ kotel_type_t active_kotel = 0; // 0 - нет активного котла, 1 - 
 #define CFG_INDEX_SCHEDULE_ENABLED 6
 #define CFG_TEMPSET_SCHEDULE_START_IDX 7
 
-#define VALDES_INDEX_WORK_MODE 0 
-#define VALDES_INDEX_THERMO_ENABLED 1 
+#define VALDES_INDEX_WORK_MODE 0  
+#define VALDES_INDEX_TEMP_SOURCE -1
 #define VALDES_INDEX_THERMO_PERIOD -1 
-#define VALDES_INDEX_THERMO_HYSTERESIS -1 
+#define VALDES_INDEX_THERMO_HYSTERESIS 1 
 #define VALDES_INDEX_THERMO_TEMPSET 2
 #define VALDES_INDEX_PUMP_DELAY -1
-#define VALDES_INDEX_SCHEDULE_ENABLED 2
+#define VALDES_INDEX_SCHEDULE_ENABLED 3
 #define VALDES_TEMPSET_SCHEDULE_START_IDX -1
+
+#define VALDES_INDEX_TEMP_EXTERNAL 4
 
 #define CFG_TEMPSET_SCHEDULE_COUNT 5
 
@@ -114,6 +127,7 @@ os_timer_t pump_timer;
 
 uint8_t kotel_gpio = 255;
 uint16_t global_tempset = THERMOSTAT_TEMPSET;
+uint8_t temp_source = 0;
 
 int16_t kotel_2_min_temp;
 int16_t kotel_1_max_temp;
@@ -135,17 +149,21 @@ int16_t ICACHE_FLASH_ATTR get_temp()
 {
     int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
 
-    _temp =  vsens[0][0];
+    if ( temp_source == 0) {
+        _temp =  vsens[0][0];
 
-    //******* работаем по средней температуре
-    //_temp = (_temp + vsens[1][1]) / 2;
-    //_temp = (_temp + vsens[1][2]) / 2;
-    //****************************************
+        //******* работаем по средней температуре
+        //_temp = (_temp + vsens[1][0]) / 2;
+        //_temp = (_temp + vsens[2][0]) / 2;
+        //****************************************
 
-    //******* работаем по минимальной  температуре
-    _temp = ( _temp < vsens[1][0] ) ? _temp : vsens[1][0];
-    _temp = ( _temp < vsens[2][0] ) ? _temp : vsens[2][0];
-    //****************************************
+        //******* работаем по минимальной  температуре
+        _temp = ( _temp < vsens[1][0] ) ? _temp : vsens[1][0];
+        _temp = ( _temp < vsens[2][0] ) ? _temp : vsens[2][0];
+        //****************************************
+    } else {
+        _temp = valdes[VALDES_INDEX_TEMP_EXTERNAL];
+    }
 
     return _temp;
 }
@@ -482,9 +500,9 @@ void ICACHE_FLASH_ATTR handle_params() {
     need_save |= handle_config_param(CFG_INDEX_WORK_MODE,               VALDES_INDEX_WORK_MODE,                 &val,                 0, 0, 3);
     work_mode = val;
 
-    val = thermo->enabled;
-    need_save |= handle_config_param(CFG_INDEX_THERMO_ENABLED,            VALDES_INDEX_THERMO_ENABLED,              &val,           0, 0, 1);
-    thermo->enabled = val;
+    val = temp_source;
+    need_save |= handle_config_param(CFG_INDEX_TEMP_SOURCE,           VALDES_INDEX_TEMP_SOURCE,             &val,          0, 0,1);
+    temp_source = val;
 
     val = thermo->period;
     need_save |= handle_config_param(CFG_INDEX_THERMO_PERIOD,           VALDES_INDEX_THERMO_PERIOD,             &val,          THERMOSTAT_PERIOD, 5, 600);
@@ -664,7 +682,12 @@ void webfunc(char *pbuf)
         }
 
         os_sprintf(HTTPBUFF,"<div>Гистерезис: <b>%d.%d °C</b></div>", (int16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10);
-        os_sprintf(HTTPBUFF,"<div>Температура: <b>%d.%d °C</b></div>", (int16_t)(thermo->value / 10), thermo->value % 10);
+        
+        os_sprintf(HTTPBUFF,"<div>Температура%s: <b>%d.%d °C</b></div>"
+                           , temp_source ? " (ext)" : ""
+                           , (int16_t)(thermo->value / 10)
+                           , thermo->value % 10
+                           );
 
         #ifdef PUMP_DELAY
         os_sprintf(HTTPBUFF,"<div>");
