@@ -87,6 +87,8 @@ valdes4 - внешняя температура
 #define KOTEL_2_MIN_TEMP -100 // -10  x10
 #define KOTEL_1_MAX_TEMP  50 // 5  x10
 
+#define HIDE_GPIO_BLOCK 
+
 typedef enum {
     KOTEL_NONE,
     KOTEL_1,
@@ -778,10 +780,12 @@ void webfunc(char *pbuf)
                             "{"
                                 "gg[0].innerHTML = 'Управление котлами:';"
                             "}"
+                            #ifdef HIDE_GPIO_BLOCK
                             " if ( gg[1].innerHTML == \"GPIO:\")"
                                 " { gg[1].style.display=\"none\";"
                                    "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
                                 "}"
+                            #endif
                             "let stl = document.createElement('style');"
                             "stl.innerText = \".blk{float:none;display:flex;padding:6px 0px;} "
                                               ".flr{float:right;} "
