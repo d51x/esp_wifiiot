@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.83"
+#define FW_VER "1.85"
 /*
 0    1                    2          3              4           5                   6          7      8        9      10       11     12       13     14       15    
 Авто,Источник температуры,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -64,17 +64,15 @@ valdes4 - внешняя температура
 #define GPIO_OFF 0
 
 #define KOTEL_NONE_NAME "--------"
-#define KOTEL1_GPIO 15 
+#define KOTEL1_GPIO 12
 //#define KOTEL1_NAME "дизельный"
 #define KOTEL1_NAME "Котел1"
 
 // !!!! если не нужен котел 2, просто закоментируйте строки
-#define KOTEL2_GPIO 13 
+#define KOTEL2_GPIO 14 
 //#define KOTEL2_NAME "электрический"
 #define KOTEL2_NAME "Котел2"
-//#define KOTEL2_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
-
-#define KOTEL2_NIGHT_MODE_GPIO 2  // ESC режим для Протерма
+#define KOTEL2_NIGHT_MODE_GPIO 16  // ESC режим для Протерма
 
 #define NIGHT_MODE_START_TIME 23
 #define NIGHT_MODE_END_TIME 7
@@ -145,12 +143,15 @@ schedules_tempset_t schedules_tempset[CFG_TEMPSET_SCHEDULE_COUNT];
 uint8_t schedule_enabled = 0;
 
 #define TEMP_DELTA 10
+#define TEMP_DELTA_ATTEMPT 5
+
 int16_t temperature = 0;
 int16_t temp_prev = 2550;
 int16_t ICACHE_FLASH_ATTR get_temp() 
 {
     int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
-
+    static int16_t prev = 0;
+    static uint8_t cnt = 0;
     if ( temp_source == 0) {
         _temp =  vsens[0][0];
 
@@ -167,6 +168,25 @@ int16_t ICACHE_FLASH_ATTR get_temp()
         _temp = valdes[VALDES_INDEX_TEMP_EXTERNAL];
     }
 
+    if ( prev == 0 ) prev = _temp;
+
+    if ( _temp == 0 || _temp == 850 || _temp == 2550 // глюки и отвалы датчик ds18b20
+         || _temp - prev > TEMP_DELTA  // текущая больше предыдущей на дельту
+         || prev - _temp > TEMP_DELTA  // предыдущая  больше текущей на дельту
+        )
+    {
+        cnt++;          // счетчик отклонений температуры, если отклонение было более 3-х раз подряд, значит было открыто окно или дверь
+                        // и это не глюк датчика, при глюке датчика температура обычно скачет вверх/вниз и возвращается обратно
+        if ( cnt > TEMP_DELTA_ATTEMPT ) {
+            prev = _temp;
+            cnt = 0;
+        } else {
+            _temp = prev;  // оставляем предыдущую
+        }
+    } else {
+        prev = _temp;
+        cnt = 0;
+    }
     return _temp;
 }
 
