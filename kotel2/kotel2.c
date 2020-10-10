@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.89"
+#define FW_VER "1.90"
 /*
 0    1                    2          3              4           5                   6          7      8        9      10       11     12       13     14       15    
 Авто,Источник температуры,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -364,7 +364,6 @@ void ICACHE_FLASH_ATTR reset_pump_cb(){
 }
 
 void ICACHE_FLASH_ATTR start_pump_timer(){
-    if ( pump_active >0 && pump_active < pump_delay ) return;
     pump_active = pump_delay; // активируем флаг, что насос котла 2 еще работает после выключения котла 2
     os_timer_disarm( &pump_timer );
     os_timer_setfn( &pump_timer, (os_timer_func_t *)reset_pump_cb, NULL);
@@ -437,14 +436,19 @@ void ICACHE_FLASH_ATTR load_off(void *args)
 {
     // функция отключения нагрузки
     //GPIO_ALL_M(kotel_gpio, GPIO_OFF);
-    GPIO_ALL(kotel_gpio, GPIO_OFF);
+    
     #ifdef KOTEL2_GPIO
     if ( kotel_gpio == KOTEL2_GPIO ) {
         #ifdef PUMP_DELAY
-        start_pump_timer();
+        uint8_t st = GPIO_ALL_GET( kotel_gpio );
+        if ( st == GPIO_ON ) {
+            start_pump_timer();
+        }
         #endif
     }
     #endif
+
+    GPIO_ALL(kotel_gpio, GPIO_OFF);
 }
 
 void ICACHE_FLASH_ATTR load_on(void *args)
