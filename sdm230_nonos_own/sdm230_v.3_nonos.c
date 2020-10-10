@@ -5,7 +5,7 @@
 
 	#define MQTTD
 
-	#define FW_VER "3.1"
+	#define FW_VER "3.2"
 	
 	/*
 	* SDM Task Delay
@@ -35,6 +35,8 @@
 	#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
 	#define SDM_PAUSE_TASK_MS 					50
 	#define MQTT_PAUSE_TASK_MS 					50
+
+	#define CHECK_ERROR_COUNT			100
 
 	#define RESET_LOAD_GPIO				2
 	#define RESET_GPIO_OFF				0
@@ -91,6 +93,7 @@
 	uint8_t sdm_task_delay = SDM_PAUSE_TASK_MS;
 	uint32_t command = SDM_NO_COMMAND;
 	static volatile float voltage = 0;
+	static volatile float voltage_prev = 0;
 	static volatile float current = 0;
 	static volatile float power = 0;
 	static volatile float energy = 0;
@@ -109,6 +112,7 @@
 	uint32_t overload_time = OVERLOAD_TIME;
 	uint32_t overload_detect_delay = OVERLOAD_DETECT_DELAY_MS;
 
+	uint16_t error_count = 0;
 	uint8_t opt_saving = 0;
 
 	void system_start_cb( );
@@ -202,9 +206,9 @@ void ICACHE_FLASH_ATTR mqtt_send_valdes(uint32_t val, uint8_t idx) {
 	if ( mqtt_client == NULL) return;
 	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload,"%d", val);
+	system_soft_wdt_feed();	
 	MQTT_Publish(mqtt_client, "valuedes0", payload, os_strlen(payload), 2, 0, 1);
 	os_delay_us(20);
-	system_soft_wdt_feed();	
 }
 
 uint8_t ICACHE_FLASH_ATTR get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
@@ -277,6 +281,17 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 	if ( delayed_counter > 0 ) { 
 		delayed_counter--;	
 	}	
+
+	// проверяем на зависание чтения (последнее время чтение данных зависает примерно через 4 дня и данные не изменяются)
+	// будем проверять по напряжению, если напряжение было одинаково 100 сек подряд, значит могло зависнуть
+	if ( voltage != voltage_prev ) {
+		// все хорошо, запомним предыдущее показание
+		voltage_prev = voltage;
+		error_count = 0;
+	} else {
+		// показания одинаковы, увеличиваем ошибку
+		error_count++;
+	}
 }
 
 void system_start_cb( ){
@@ -397,6 +412,8 @@ void read_electro_params_c3_v1_c3_p1__e120(uint8_t counter) {
 void read_electro_params_c20vp__er_10sec(uint8_t counter) {
 	// c20vp - ток 20 раз подряд, 1 раз, 1 раз
 	// er_60sec - расход 1 раз в 10 сек
+	// 20 * 50 msec = 1000 msec, => 20 раз/сек
+	// 20 * 100 msec = 2000 msec, => 10 раз/сек
 	static uint32_t ts = 0;
 	static uint32_t ts2 = 0;
 
@@ -427,6 +444,7 @@ void read_electro_cb()
 		// можно писать в uart
 		el_cnt++;  // увеличим счетчик
 
+		system_soft_wdt_feed();
 		#ifdef ELECTRO_C20_V1_P1__E10
 			if ( el_cnt > 22 ) el_cnt = 1;		
 			read_electro_params_c20vp__er_10sec(el_cnt);
@@ -434,9 +452,7 @@ void read_electro_cb()
 			if ( el_cnt > 120 ) el_cnt = 1;
 			read_electro_params_c3_v1_c3_p1__e120(el_cnt);
 		#endif
-
 		os_delay_us(500);	
-		system_soft_wdt_feed();
 	}
 	os_timer_disarm(&read_electro_timer);
 	os_timer_setfn(&read_electro_timer, (os_timer_func_t *)read_electro_cb, NULL);
@@ -557,6 +573,8 @@ void webfunc(char *pbuf) {
 				);
 
 	
+	os_sprintf(HTTPBUFF, "<p><small><b>Ошибки чтения:</b> %d</small></p>", error_count);
+
 	os_sprintf(HTTPBUFF,"<p><small><b>Версия прошивки:</b> %s</small></p>", FW_VER); 
 	os_sprintf(HTTPBUFF,"<p style='color: red;'><small><b>Прежде чем менять данные, перезагрузи модуль!!!</b></small></p>"); 
 
