@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.85"
+#define FW_VER "1.89"
 /*
 0    1                    2          3              4           5                   6          7      8        9      10       11     12       13     14       15    
 Авто,Источник температуры,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -121,7 +121,7 @@ uint8_t work_mode = 0; // режим работы (cfg0)
 
 #ifdef PUMP_DELAY
 uint16_t pump_delay = 300;
-uint8_t is_pump_active = 0;
+uint16_t pump_active = 0;
 os_timer_t pump_timer;
 #endif
 
@@ -143,12 +143,13 @@ schedules_tempset_t schedules_tempset[CFG_TEMPSET_SCHEDULE_COUNT];
 uint8_t schedule_enabled = 0;
 
 #define TEMP_DELTA 10
-#define TEMP_DELTA_ATTEMPT 5
+#define TEMP_DELTA_ATTEMPT 180
 
 int16_t temperature = 0;
 int16_t temp_prev = 2550;
 int16_t ICACHE_FLASH_ATTR get_temp() 
 {
+    // срабатывает раз в секунду
     int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
     static int16_t prev = 0;
     static uint8_t cnt = 0;
@@ -175,7 +176,7 @@ int16_t ICACHE_FLASH_ATTR get_temp()
          || prev - _temp > TEMP_DELTA  // предыдущая  больше текущей на дельту
         )
     {
-        cnt++;          // счетчик отклонений температуры, если отклонение было более 3-х раз подряд, значит было открыто окно или дверь
+        cnt++;          // счетчик отклонений температуры, если отклонение было более 3 мин (180 сек), значит было открыто окно или дверь
                         // и это не глюк датчика, при глюке датчика температура обычно скачет вверх/вниз и возвращается обратно
         if ( cnt > TEMP_DELTA_ATTEMPT ) {
             prev = _temp;
@@ -354,14 +355,20 @@ int8_t ICACHE_FLASH_ATTR get_schedule_index()
 
 #ifdef PUMP_DELAY
 void ICACHE_FLASH_ATTR reset_pump_cb(){
-    is_pump_active = 0;
+    if ( pump_active > 0 ) {
+        pump_active--;
+    } else {
+        os_timer_disarm( &pump_timer );
+    }
+
 }
 
 void ICACHE_FLASH_ATTR start_pump_timer(){
-    is_pump_active = 1; // активируем флаг, что насос котла 2 еще работает после выключения котла 2
+    if ( pump_active >0 && pump_active < pump_delay ) return;
+    pump_active = pump_delay; // активируем флаг, что насос котла 2 еще работает после выключения котла 2
     os_timer_disarm( &pump_timer );
     os_timer_setfn( &pump_timer, (os_timer_func_t *)reset_pump_cb, NULL);
-    os_timer_arm( &pump_timer, pump_delay * 1000, 0);    
+    os_timer_arm( &pump_timer, 1000, 1);    
 }
 #endif
 
@@ -445,7 +452,7 @@ void ICACHE_FLASH_ATTR load_on(void *args)
     // функция включения нагрузки
     //GPIO_ALL_M(kotel_gpio, GPIO_ON);  
     #ifdef PUMP_DELAY
-    if ( kotel_gpio == KOTEL1_GPIO && is_pump_active ) return; // следующий запуск по термостату должен включить, т.к. к тому времени флаг должен быть сброшен
+    if ( kotel_gpio == KOTEL1_GPIO && pump_active > 0 ) return; // следующий запуск по термостату должен включить, т.к. к тому времени флаг должен быть сброшен
     #endif
     GPIO_ALL(kotel_gpio, GPIO_ON);   
 }
@@ -713,7 +720,7 @@ void webfunc(char *pbuf)
 
         #ifdef PUMP_DELAY
         os_sprintf(HTTPBUFF,"<div>");
-        os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): <b>%s</b></span>", pump_delay, is_pump_active ? "Да" : "Нет"); 
+        os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): <b>%s</b></span>", pump_active > 0 ? pump_active : pump_delay, pump_active > 0 ? "Да" : "Нет"); 
         os_sprintf(HTTPBUFF, "</div>");  // <div class='blk'>
         #endif         
 
