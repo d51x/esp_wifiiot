@@ -5,7 +5,7 @@
 
 	#define MQTTD
 
-	#define FW_VER "3.2"
+	#define FW_VER "3.7"
 	
 	/*
 	* SDM Task Delay
@@ -53,6 +53,28 @@
 	#define high_byte(val) (uint8_t) ( val >> 8 )
 	#define low_byte(val) (uint8_t) ( val & 0xFF )
 
+	typedef struct {
+		float value;
+		uint32_t dt;
+	} dt_value_t;
+
+	typedef struct {
+		dt_value_t voltage_min;
+		dt_value_t voltage_max;
+		dt_value_t current_max;
+		float energy_00;		// запомним значение счетчика в 00:00
+		float energy_07;		// запомним значение счетчика в 07:00
+		float energy_07_prev;		// запомним значение счетчика в 07:00
+		float energy_23;		// запомним значения счетчика в 23:00
+		float energy_23_prev;		// запомним значения счетчика в 23:00
+		float energy_yesterday; // вычисленное значение
+		float energy_23_07;
+		float energy_07_23;
+		uint32_t crc32;
+	} rtc_data_t;
+
+	rtc_data_t rtc_data;
+
 	typedef struct SDMCommand_request {
 		uint8_t addr;
 		uint8_t func_code;		// input "04" or holding register "03"
@@ -99,6 +121,11 @@
 	static volatile float energy = 0;
 	static volatile float energy_resettable = 0;
 
+	float energy_yesterday = 0;
+	float energy_today = 0;
+	float energy_23_07 = 0;
+	float energy_07_23 = 0;
+
 	uint8_t delayed_counter = DELAYED_START;
 
 	static volatile os_timer_t read_electro_timer;
@@ -137,6 +164,19 @@
 	
 	#define millis() (uint32_t) (micros() / 1000ULL) 
 
+void calc_min(const float value, dt_value_t *min) {
+	if ( value == 0 ) return;
+	if ( min->value == 0 ) min->value = value;
+	else if ( min->value > value ) min->value = value;
+}
+
+void calc_max(const float value, dt_value_t *max) {
+	if ( value == 0 ) return;
+	// max
+	if ( max->value == 0 ) max->value = value;
+	else if ( max->value < value ) max->value = value;
+}
+
 void send_buffer(uint8_t *buffer, uint8_t len){
 	uart0_tx_buffer(buffer, len);
 }
@@ -169,6 +209,8 @@ void read_buffer(){
 					#else
 						voltage = ( v == 0 ) ? voltage : v;
 					#endif
+					calc_min( voltage, &rtc_data.voltage_min);
+					calc_max( voltage, &rtc_data.voltage_max);
 					break;
 				case SDM_CURRENT:
 					#ifdef CUT_OFF_INCORRECT_VALUE
@@ -176,6 +218,7 @@ void read_buffer(){
 					#else
 						current = ( v == 0) ? current : v;		
 					#endif
+					calc_max( current, &rtc_data.current_max);
 					break;
 				case SDM_POWER:
 					#ifdef CUT_OFF_INCORRECT_VALUE
@@ -255,6 +298,29 @@ uint8_t ICACHE_FLASH_ATTR get_config_values(uint8_t r) {   // return 0 - no need
 }
 
 
+uint32_t calcCRC32(const uint8_t *data, uint16_t sz) {
+  // Обрабатываем все данные, кроме последних четырёх байтов,
+  // где и будет храниться проверочная сумма.
+  size_t length = sz-4;
+ 
+  uint32_t crc = 0xffffffff;
+  while (length--) {
+    uint8_t c = *data++;
+	uint32_t i;
+    for (i = 0x80; i > 0; i >>= 1) {
+      bool bit = crc & 0x80000000;
+      if (c & i) {
+        bit = !bit;
+      }
+      crc <<= 1;
+      if (bit) {
+        crc ^= 0x04c11db7;
+      }
+    }
+  }
+  return crc;
+}
+
 void ICACHE_FLASH_ATTR startfunc(){
 
 	overload = 0;
@@ -264,6 +330,19 @@ void ICACHE_FLASH_ATTR startfunc(){
 	ETS_UART_INTR_ATTACH(read_buffer, NULL);
 
 	get_config_values(0);
+
+	// читаем rtc
+	system_rtc_mem_read(70, &rtc_data, sizeof(rtc_data_t));
+	// проверяем crc
+	uint32_t crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
+	if ( crc32 != rtc_data.crc32 ) {
+		// кривые данные, обнулим
+		os_memset(&rtc_data, 0, sizeof(rtc_data_t));
+		crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
+		rtc_data.crc32 = crc32;
+		// пишем в rtc обнуленные данные
+		system_rtc_mem_write(70, &rtc_data, sizeof(rtc_data_t));
+	}
 
 	// запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
 	os_timer_disarm(&system_start_timer);
@@ -292,6 +371,61 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		// показания одинаковы, увеличиваем ошибку
 		error_count++;
 	}
+
+
+	// корректировка нулевых значений счетчиков
+	if ( rtc_data.energy_00 == 0) rtc_data.energy_00 = energy;
+	if ( rtc_data.energy_07 == 0) rtc_data.energy_07 = energy;
+	if ( rtc_data.energy_07_prev == 0) rtc_data.energy_07_prev = energy;
+	if ( rtc_data.energy_23 == 0) rtc_data.energy_23 = energy;
+	if ( rtc_data.energy_23_prev == 0) rtc_data.energy_23_prev = energy;
+
+	// пишем данные в rtc
+	if ( time_loc.hour == 0 && time_loc.min == 0 && time_loc.sec == 0 )
+	{
+		if ( energy > 0 ) {
+			rtc_data.energy_yesterday = energy - rtc_data.energy_00;
+			rtc_data.energy_00 = energy;
+		}
+	} 
+	else if ( time_loc.hour == 7 && time_loc.min == 0 && time_loc.sec == 0 )
+	{
+		if ( energy > 0 ) {
+			rtc_data.energy_23_07 = rtc_data.energy_07 - rtc_data.energy_23_prev;
+			rtc_data.energy_07_prev = rtc_data.energy_07; 
+			rtc_data.energy_07 = energy;
+		}
+	}
+	else if ( time_loc.hour == 23 && time_loc.min == 0 && time_loc.sec == 0 )
+	{
+		rtc_data.energy_07_23 = rtc_data.energy_23 - rtc_data.energy_07;
+		if ( energy > 0 ) {
+			rtc_data.energy_23_prev = rtc_data.energy_23;
+			rtc_data.energy_23 = energy;
+		}
+	}
+
+	uint32_t crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
+	rtc_data.crc32 = crc32;
+	// пишем в rtc обнуленные данные
+	system_rtc_mem_write(70, &rtc_data, sizeof(rtc_data_t));
+
+	energy_today = (energy > 0) ? energy - rtc_data.energy_00 : 0;
+
+	if ( time_loc.hour >=7 && time_loc.hour < 23 )
+	{
+		energy_07_23 = (energy > 0) ? energy - rtc_data.energy_07 : 0;
+	} else {
+		energy_07_23 = rtc_data.energy_07_23;
+	}
+	
+	if ( time_loc.hour < 7 || time_loc.hour >= 23 )
+	{
+		energy_23_07 = ( energy > 0 ) ? energy - rtc_data.energy_23 : 0;
+	} else {
+		energy_23_07 = rtc_data.energy_23_07;
+	}	
+
 }
 
 void system_start_cb( ){
@@ -573,6 +707,38 @@ void webfunc(char *pbuf) {
 				);
 
 	
+	os_sprintf(HTTPBUFF, "<div>");
+	
+	os_sprintf(HTTPBUFF, "<div><b>Напряжение (min):</b> ");
+	if ( rtc_data.voltage_min.value > 0 )
+		os_sprintf(HTTPBUFF, "%d В</div>", (int)rtc_data.voltage_min.value);
+	else
+		os_sprintf(HTTPBUFF, "---</div>");
+	
+	os_sprintf(HTTPBUFF, "<div><b>Напряжение (max):</b> ");
+	if ( rtc_data.voltage_max.value > 0 )
+		os_sprintf(HTTPBUFF, "%d В</div>", (int)rtc_data.voltage_max.value);
+	else
+		os_sprintf(HTTPBUFF, "---</div>");
+
+
+	os_sprintf(HTTPBUFF, "<div><b>Ток (max):</b> ");
+	if ( rtc_data.current_max.value > 0 )
+		os_sprintf(HTTPBUFF, "%d.%d А</div>", (uint16_t)rtc_data.current_max.value, 		(uint16_t)(rtc_data.current_max.value*100) % 100);
+	else
+		os_sprintf(HTTPBUFF, "---</div>");
+
+	os_sprintf(HTTPBUFF, "</div>");
+
+	//=====================================
+	os_sprintf(HTTPBUFF, "<div>");
+	os_sprintf(HTTPBUFF, "<div><b>Расход (вчера):</b> %d.%d кВт*ч</div>", (uint32_t)rtc_data.energy_yesterday, 		(uint32_t)(rtc_data.energy_yesterday*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b>Расход (сегодня):</b> %d.%d кВт*ч</div>", (uint32_t)energy_today, 		(uint32_t)(energy_today*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b>Расход (день):</b> %d.%d кВт*ч</div>", (uint32_t)energy_07_23, 		(uint32_t)(energy_07_23*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b>Расход (ночь):</b> %d.%d кВт*ч</div>", (uint32_t)energy_23_07, 		(uint32_t)(energy_23_07*100) % 100);
+	os_sprintf(HTTPBUFF, "</div>");
+
+	//=========================================
 	os_sprintf(HTTPBUFF, "<p><small><b>Ошибки чтения:</b> %d</small></p>", error_count);
 
 	os_sprintf(HTTPBUFF,"<p><small><b>Версия прошивки:</b> %s</small></p>", FW_VER); 
