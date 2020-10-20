@@ -5,7 +5,7 @@
 
 	#define MQTTD
 
-	#define FW_VER "3.7"
+	#define FW_VER "3.9"
 	
 	/*
 	* SDM Task Delay
@@ -370,6 +370,15 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 	} else {
 		// показания одинаковы, увеличиваем ошибку
 		error_count++;
+
+		/*
+			если кол-во превысило лимит и время не равно
+			0:00:00-59 или
+			0:07:00-59 или
+			0:23:00-59 
+			отправляем по mqtt
+			ребутим
+		*/
 	}
 
 
@@ -731,11 +740,16 @@ void webfunc(char *pbuf) {
 	os_sprintf(HTTPBUFF, "</div>");
 
 	//=====================================
+	os_sprintf(HTTPBUFF, "<style>"
+						 ".tn {float: left; width: 70px; text-align: right; margin-right: 10px;}"
+						 "</style>");
+
 	os_sprintf(HTTPBUFF, "<div>");
-	os_sprintf(HTTPBUFF, "<div><b>Расход (вчера):</b> %d.%d кВт*ч</div>", (uint32_t)rtc_data.energy_yesterday, 		(uint32_t)(rtc_data.energy_yesterday*100) % 100);
-	os_sprintf(HTTPBUFF, "<div><b>Расход (сегодня):</b> %d.%d кВт*ч</div>", (uint32_t)energy_today, 		(uint32_t)(energy_today*100) % 100);
-	os_sprintf(HTTPBUFF, "<div><b>Расход (день):</b> %d.%d кВт*ч</div>", (uint32_t)energy_07_23, 		(uint32_t)(energy_07_23*100) % 100);
-	os_sprintf(HTTPBUFF, "<div><b>Расход (ночь):</b> %d.%d кВт*ч</div>", (uint32_t)energy_23_07, 		(uint32_t)(energy_23_07*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b>Расход</b></div>");
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>вчера:</b> %d.%d кВт*ч</div>", (uint32_t)rtc_data.energy_yesterday, 		(uint32_t)(rtc_data.energy_yesterday*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>сегодня:</b> %d.%d кВт*ч</div>", (uint32_t)energy_today, 		(uint32_t)(energy_today*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>день:</b> %d.%d кВт*ч</div>", (uint32_t)energy_07_23, 		(uint32_t)(energy_07_23*100) % 100);
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>ночь:</b> %d.%d кВт*ч</div>", (uint32_t)energy_23_07, 		(uint32_t)(energy_23_07*100) % 100);
 	os_sprintf(HTTPBUFF, "</div>");
 
 	//=========================================
