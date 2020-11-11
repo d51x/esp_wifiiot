@@ -2,7 +2,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 
-#define FW_VER "1.90"
+#define FW_VER "2.0"
 /*
 0    1                    2          3              4           5                   6          7      8        9      10       11     12       13     14       15    
 Авто,Источник температуры,Период/сек,Гистерезис/x10,Уставка/x10,Задержка насоса/сек,Расписание,ЧЧММ-1,Уст1/x10,ЧЧММ-2,Уст2/x10,ЧЧММ-3,Уст3/x10,ЧЧММ-4,Уст4/x10,ЧЧММ-5,Уст5/x10
@@ -147,47 +147,86 @@ uint8_t schedule_enabled = 0;
 
 int16_t temperature = 0;
 int16_t temp_prev = 2550;
+
+#define TEMP_FRAME_SIZE 5
+int16_t temp1_arr[TEMP_FRAME_SIZE] = { 850, 850, 850, 850, 850 };
+int16_t temp2_arr[TEMP_FRAME_SIZE] = { 850, 850, 850, 850, 850 };
+int16_t temp3_arr[TEMP_FRAME_SIZE] = { 850, 850, 850, 850, 850 };
+
+void register_temp(int16_t *temp_arr, int16_t temp)
+{
+    uint8_t i;
+    for (i=1;i<TEMP_FRAME_SIZE;i++)
+    {
+        temp_arr[i-1] = temp_arr[i];
+    }
+    temp_arr[TEMP_FRAME_SIZE-1] = temp;
+}
+
+
+int16_t get_median_temp(int16_t *temp_arr, int16_t temp)
+{
+    register_temp(temp_arr, temp);
+
+    // sort
+    int16_t arr[TEMP_FRAME_SIZE];
+    memcpy(&arr, temp_arr, sizeof(int16_t) * TEMP_FRAME_SIZE);
+
+	uint8_t i, j = 0;
+	for ( i = 0; i < TEMP_FRAME_SIZE; i++) {
+		for ( j = i + 1; j < TEMP_FRAME_SIZE; j++) {
+			if (arr[i] < arr[j]) {
+				int16_t t = arr[i];
+				arr[i] = arr[j];
+				arr[j] = t;
+			}
+		}
+	}
+    return arr[ (uint8_t)(TEMP_FRAME_SIZE / 2)];
+}
+
 int16_t ICACHE_FLASH_ATTR get_temp() 
 {
     // срабатывает раз в секунду
-    int16_t _temp = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
+    int16_t _temp, _temp2, _temp3 = 240; // взять с датчика, или из valdes, или расчитать среднее или минимальное по датчикам
     static int16_t prev = 0;
     static uint8_t cnt = 0;
     if ( temp_source == 0) {
-        _temp =  vsens[0][0];
+        _temp =  get_median_temp( &temp1_arr[0], vsens[0][0]);
+        _temp2 =  get_median_temp( &temp2_arr[0], vsens[1][0]);
+        _temp3 =  get_median_temp( &temp3_arr[0], vsens[2][0]);
 
-        //******* работаем по средней температуре
-        //_temp = (_temp + vsens[1][0]) / 2;
-        //_temp = (_temp + vsens[2][0]) / 2;
-        //****************************************
+        //  _temp =  vsens[0][0];
+        //  _temp2 =  vsens[1][0];
+        //  _temp3 =  vsens[2][0];
 
         //******* работаем по минимальной  температуре
-        _temp = ( _temp < vsens[1][0] ) ? _temp : vsens[1][0];
-        _temp = ( _temp < vsens[2][0] ) ? _temp : vsens[2][0];
+        _temp = ( _temp < _temp2 ) ? _temp : _temp2;
+        _temp = ( _temp < _temp3 ) ? _temp : _temp3;
         //****************************************
     } else {
         _temp = valdes[VALDES_INDEX_TEMP_EXTERNAL];
     }
 
-    if ( prev == 0 ) prev = _temp;
+    // if ( prev == 0 ) prev = _temp;
 
-    if ( _temp == 0 || _temp == 850 || _temp == 2550 // глюки и отвалы датчик ds18b20
-         || _temp - prev > TEMP_DELTA  // текущая больше предыдущей на дельту
-         || prev - _temp > TEMP_DELTA  // предыдущая  больше текущей на дельту
-        )
-    {
-        cnt++;          // счетчик отклонений температуры, если отклонение было более 3 мин (180 сек), значит было открыто окно или дверь
-                        // и это не глюк датчика, при глюке датчика температура обычно скачет вверх/вниз и возвращается обратно
-        if ( cnt > TEMP_DELTA_ATTEMPT ) {
-            prev = _temp;
-            cnt = 0;
-        } else {
-            _temp = prev;  // оставляем предыдущую
-        }
-    } else {
-        prev = _temp;
-        cnt = 0;
-    }
+    // if ( _temp == 0 || _temp == 850 || _temp == 2550 // глюки и отвалы датчик ds18b20
+    //      || _temp - prev > TEMP_DELTA  // текущая больше предыдущей на дельту
+    //      || prev - _temp > TEMP_DELTA  // предыдущая  больше текущей на дельту
+    //     )
+    // {
+    //     cnt++;          // счетчик отклонений температуры, если отклонение было более 3 мин (180 сек), значит было открыто окно или дверь
+    //                     // и это не глюк датчика, при глюке датчика температура обычно скачет вверх/вниз и возвращается обратно
+    //     if ( cnt > TEMP_DELTA_ATTEMPT ) {
+    //         prev = _temp;
+    //         cnt = 0;
+    //     } else {
+    //         _temp = prev;  // оставляем предыдущую
+    //     }
+    // } else {
+    //     prev = _temp;
+    //     cnt = 0;
+    // }
     return _temp;
 }
 
@@ -608,7 +647,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
         }   
 
         // определение активного 
-        temperature = get_temp();
+        //temperature = get_temp(); // каждую секунду слишком часто, не срабатывает фильтр, т.к. vsens каждые 60 сек приходит
         active_kotel = set_active_kotel();
         thermostat_set_value(thermo_h, temperature);
 
@@ -626,7 +665,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
     {
         // выполнение кода каждую минуту
 
-
+        temperature = get_temp();  // vsens обновляется с периодичностью 1 раз в минуту, если верить документации
 
         // отправить новую уставку по mqtt
 
@@ -722,6 +761,37 @@ void webfunc(char *pbuf)
                            , thermo->value % 10
                            );
 
+        // uint8_t k;
+        // os_sprintf(HTTPBUFF,"<div><b>");
+        // for (k=0;k<TEMP_FRAME_SIZE;k++)
+        // {
+        //     os_sprintf(HTTPBUFF,"%d.%d ", 
+        //                         (int16_t)(temp1_arr[k] / 10), 
+        //                         temp1_arr[k] % 10
+        //               );
+        // }
+        // os_sprintf(HTTPBUFF,"</b></div>");
+        
+        // os_sprintf(HTTPBUFF,"<div><b>");
+        // for (k=0;k<TEMP_FRAME_SIZE;k++)
+        // {
+        //     os_sprintf(HTTPBUFF,"%d.%d ", 
+        //                         (int16_t)(temp2_arr[k] / 10), 
+        //                         temp2_arr[k] % 10
+        //               );
+        // }
+        // os_sprintf(HTTPBUFF,"</b></div>");
+
+        // os_sprintf(HTTPBUFF,"<div><b>");
+        // for (k=0;k<TEMP_FRAME_SIZE;k++)
+        // {
+        //     os_sprintf(HTTPBUFF,"%d.%d ", 
+        //                         (int16_t)(temp3_arr[k] / 10), 
+        //                         temp3_arr[k] % 10
+        //               );
+        // }
+        // os_sprintf(HTTPBUFF,"</b></div>");
+
         #ifdef PUMP_DELAY
         os_sprintf(HTTPBUFF,"<div>");
         os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): <b>%s</b></span>", pump_active > 0 ? pump_active : pump_delay, pump_active > 0 ? "Да" : "Нет"); 
@@ -787,74 +857,55 @@ void webfunc(char *pbuf)
     //********************************************************************************************   
     
 
-    //********************************************************************************************   
-
-
-    //os_sprintf(HTTPBUFF,"<br>Период: %d сек", thermo->period); 
-    //os_sprintf(HTTPBUFF,"<br>Гистерезис: %d.%d °C", (uint16_t)(thermo->hysteresis / 10), thermo->hysteresis % 10); 
-    //os_sprintf(HTTPBUFF,"<br><br>Улица: %d.%d °C", (int16_t)(vsens[3][0] / 10), vsens[3][0] % 10); 
-
-    
-
-    
- 
-
     //********************************************************************************************
-    os_sprintf(HTTPBUFF,"<div class=flr'><small>Прошивка: %s</small></div>", FW_VER); 
+    os_sprintf(HTTPBUFF,"<div class='flr'><small>Прошивка: %s</small></div>", FW_VER); 
 
     os_sprintf(HTTPBUFF, "<script type='text/javascript'>"
 
-                        "window.onload = function()"
+                        "window.onload=function()"
                         "{"
-                            " let gg = document.getElementsByClassName(\"h\");"
-                            " if ( gg[0].innerHTML == \"Sensors:\")"
-                            "{"
-                                "gg[0].innerHTML = 'Управление котлами:';"
-                            "}"
-                            #ifdef HIDE_GPIO_BLOCK
-                            " if ( gg[1].innerHTML == \"GPIO:\")"
-                                " { gg[1].style.display=\"none\";"
-                                   "document.getElementsByClassName(\"c\")[1].style.display=\"none\";"
-                                "}"
-                            #endif
-                            "let stl = document.createElement('style');"
-                            "stl.innerText = \".blk{float:none;display:flex;padding:6px 0px;} "
-                                              ".flr{float:right;} "
-                                              "#tshd{display:table;} "
-                                              ".t1{width:60%%;} "
-                                              ".t2{width:40%%;} "
-                                              ".sr{font-weight:bold;color:red;} "
-                                              ".kk{border-radius:4px;margin-left:4px;width:60px;} "
-                                              "\";"
-                            "document.head.appendChild(stl);"
+                            "let stl=document.createElement('style');"
+                            "stl.innerText='.blk{float:none;display:flex;padding:6px 0px;}"
+                                                ".flr{float:right;}"
+                                                "#tshd{display:table;}"
+                                                ".t1{width:60%%;}"
+                                                ".t2{width:40%%;}"
+                                                ".sr{font-weight:bold;color:red;}"
+                                                ".kk{border-radius:4px;margin-left:4px;width:60px;}"
+                                                "';"
+                            "document.head.appendChild(stl)"
                         "};"
 
-                        "function wmode(idx,value){"
-                            "ajax_request('/valdes?int=' + idx + '&set=' + value, function(res){ "
-                                "let vals = document.getElementsByClassName('v0' + idx);"
-                                "for  (let i=0;i<vals.length;i++){vals[i].classList.remove(\"g_1\");vals[i].classList.add(\"g_0\");}"
-                                "document.getElementById('v0'+ value).classList.add(\"g_1\");"
-                            "});"
-                        "};"
-
-                        "function schd(idx, value)"
+                        "function wmode(idx,value)"
                         "{"
-                            "ajax_request('/valdes?int=' + idx + '&set=' + value, function(res)"
+                            "ajax_request('/valdes?int='+idx+'&set='+value,"
+                                "function(res)"
                                 "{"
-                                    "var vnew = 1 - parseInt(value);"
-                                    "var sc = document.getElementById('sched');"
-                                    "sc.classList.remove(\"g_\" + vnew);"
-                                    "console.log('value = ' + value);"
-                                    "console.log('!value = ' + vnew);"
-                                    "sc.classList.add(\"g_\" + value);"
-                                    "sc.innerHTML = sc.getAttribute('data-text');"
-                                    "document.getElementById('tshd').style.display = (value) ? \"table\" : \"none\";"
-                                    "document.getElementById('ushd').setAttribute(\"data-val\", vnew);"
+                                    "let vals=document.getElementsByClassName('v0'+idx);"
+                                    "for(let i=0;i<vals.length;i++){vals[i].classList.remove('g_1');vals[i].classList.add('g_0')}"
+                                    "document.getElementById('v0'+value).classList.add('g_1')"
                                 "}"
-                            ");"
-                         "};"
-                         "</script>"
-                         );
+                            ")"
+                        "};"
+
+                        "function schd(idx,value)"
+                        "{"
+                            "ajax_request("
+                                "'/valdes?int='+idx+'&set='+value,"
+                                "function(res)"
+                                    "{"
+                                        "var vnew=1-parseInt(value);"
+                                        "var sc=document.getElementById('sched');"
+                                        "sc.classList.remove('g_'+vnew);"
+                                        "sc.classList.add('g_'+value);"
+                                        "sc.innerHTML=sc.getAttribute('data-text');"
+                                        "document.getElementById('tshd').style.display=(value)?'table':'none';"
+                                        "document.getElementById('ushd').setAttribute('data-val',vnew);"
+                                    "}"
+                            ")"
+                        "}"
+                        "</script>"
+                        );
 
                          // class=c2
                          //<div class="h" style="background: #73c140">GPIO:</div>
