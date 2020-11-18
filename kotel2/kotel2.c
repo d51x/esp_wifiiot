@@ -761,37 +761,6 @@ void webfunc(char *pbuf)
                            , thermo->value % 10
                            );
 
-        // uint8_t k;
-        // os_sprintf(HTTPBUFF,"<div><b>");
-        // for (k=0;k<TEMP_FRAME_SIZE;k++)
-        // {
-        //     os_sprintf(HTTPBUFF,"%d.%d ", 
-        //                         (int16_t)(temp1_arr[k] / 10), 
-        //                         temp1_arr[k] % 10
-        //               );
-        // }
-        // os_sprintf(HTTPBUFF,"</b></div>");
-        
-        // os_sprintf(HTTPBUFF,"<div><b>");
-        // for (k=0;k<TEMP_FRAME_SIZE;k++)
-        // {
-        //     os_sprintf(HTTPBUFF,"%d.%d ", 
-        //                         (int16_t)(temp2_arr[k] / 10), 
-        //                         temp2_arr[k] % 10
-        //               );
-        // }
-        // os_sprintf(HTTPBUFF,"</b></div>");
-
-        // os_sprintf(HTTPBUFF,"<div><b>");
-        // for (k=0;k<TEMP_FRAME_SIZE;k++)
-        // {
-        //     os_sprintf(HTTPBUFF,"%d.%d ", 
-        //                         (int16_t)(temp3_arr[k] / 10), 
-        //                         temp3_arr[k] % 10
-        //               );
-        // }
-        // os_sprintf(HTTPBUFF,"</b></div>");
-
         #ifdef PUMP_DELAY
         os_sprintf(HTTPBUFF,"<div>");
         os_sprintf(HTTPBUFF,"<span>Выбег насоса (%d сек): <b>%s</b></span>", pump_active > 0 ? pump_active : pump_delay, pump_active > 0 ? "Да" : "Нет"); 
