@@ -42,7 +42,7 @@ endif
 */
 
 #define CONSUMP_ML_SEC 0.55f
-#define CONSUMP_L_SEC 0.00055f
+#define CONSUMP_L_SEC 100000*0.00055f
 
 uint16_t fuel_pump_state = 0;
 uint32_t fuel_pump_working_time = 0;
@@ -176,7 +176,7 @@ static void ICACHE_FLASH_ATTR mqtt_send_int(const char *topic, int val)
 }
 
 
-void ICACHE_FLASH_ATTR save_data()
+void ICACHE_FLASH_ATTR save_data(uint8_t save)
 {
 	SAVE_FUEL_WORKTIME_TOTAL = fuel_pump_working_time;
 	SAVE_FUEL_WORKTIME_DAY = fuel_pump_today_time;
@@ -186,6 +186,7 @@ void ICACHE_FLASH_ATTR save_data()
 	SAVE_FUEL_CONSUMPTION_DAY = i_fuel_consump_today;
 	SAVE_FUEL_CONSUMPTION_PREV = i_fuel_consump_prev;
 
+	if (save) SAVEOPT;
 }
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) 
@@ -214,7 +215,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 	
 
 	
-	if ( time_loc.hour == 0 && time_loc.min == 0 && time_loc.sec == 0 )
+	if ( time_loc.hour == 1 && time_loc.min == 0 && time_loc.sec == 0 )
 	{
 		// обнулить суточные данные ночью
 		fuel_pump_prev_time = fuel_pump_today_time;
@@ -251,6 +252,8 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 			prev_duration = on_duration;
 			i_fuel_consump_now = 0;
 			on_duration = 0;
+			// сохраним в nvs
+			save_data(0);
 		}
 	}
 	
@@ -258,14 +261,14 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 		fuel_pump_working_time++;
 		
 		//fuel_consump += CONSUMP_L_SEC;
-		i_fuel_consump += CONSUMP_L_SEC*100000;
+		i_fuel_consump += CONSUMP_L_SEC;//*100000;
 		
 		fuel_pump_today_time++;
 		
 		//fuel_consump_today += CONSUMP_L_SEC;
-		i_fuel_consump_today += CONSUMP_L_SEC*100000;
+		i_fuel_consump_today += CONSUMP_L_SEC;//*100000;
 		
-		i_fuel_consump_now += CONSUMP_L_SEC*100000;
+		i_fuel_consump_now += CONSUMP_L_SEC;//*100000;
 		on_duration = millis() - t_start;	// считаем время
 	}
 	
@@ -283,7 +286,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 		
 		GPIO_ALL(6, 0);
 		
-		//save_data();
+		save_data(1);
 	}
 	
 	// пишем данные в rtc
@@ -305,7 +308,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 	save_data(0);
 	
 	if ( timersrc % 3600 ) {
-		save_data();
+		save_data(1);
 	}
 }
 
