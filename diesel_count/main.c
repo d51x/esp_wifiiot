@@ -1,4 +1,4 @@
-#define FW_VER "1.4"
+#define FW_VER "1.5"
 /*
 Отсечка счетчика,Время общее,Расход общий,Время предыдущее,Расход предыдущий,Время сегодня,Расход сегодня,Время вчера,Расход вчера
  
@@ -203,7 +203,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 	
 	if ( rtc_data.on_cnt == 0) rtc_data.on_cnt = on_cnt;
 	
-	if ( time_loc.hour == 1 && time_loc.min == 0 && time_loc.sec == 0 )
+	if ( time_loc.hour == 23 && time_loc.min == 59 && time_loc.sec == 0 )
 	{
 		// обнулить суточные данные ночью
 		fpWorkY = fpWorkT;
