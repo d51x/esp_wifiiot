@@ -79,8 +79,6 @@ void updateDuty(int ch, int duty){
 void fadeUp(uint8_t ch, int from, int to, int period){
     int idx_from = getNexMaxtDutyIdx(from);
     int idx_to = getNexMaxtDutyIdx(to);
-    // ESP_LOGI("PWM", "fadeUp: found next max index from = %d value %d", idx_from, brightness[idx_from]);
-    // ESP_LOGI("PWM", "fadeUp: found next max index to = %d value %d", idx_to, brightness[idx_to]);
     for (int i = idx_from; i <= idx_to; i++) {
         //int _duty = mapToDuty(brightness[i], period);
         //updateDuty(ch, _duty);
@@ -91,8 +89,6 @@ void fadeUp(uint8_t ch, int from, int to, int period){
 void fadeDown(uint8_t ch, int from, int to, int period){
     int idx_from = getNextMinDutyIdx(from);
     int idx_to = getNextMinDutyIdx(to);
-    // ESP_LOGI("PWM", "fadeDown: found next min index from = %d value %d", idx_from, brightness[idx_from]);
-    // ESP_LOGI("PWM", "fadeDown: found next min index to = %d value %d", idx_to, brightness[idx_to]);
     for (int i = idx_from; i >= idx_to; i--) {
         //int _duty = mapToDuty(brightness[i], period);
         //updateDuty(ch, _duty);
@@ -158,18 +154,13 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
     char *topic = (char *)os_strstr(topicBuf, lwt);
     if (!topic) return;
     topic += lentopic;
-    char *fade = "fade";
-        
-    ESP_LOGI("MQTT", "received topic  = %s", topic);
     if ( !strcoll(topic, "fanspeed") ) {
         int32_t m = atoi(dataBuf);
         ESP_LOGI("MQTT", "received fan speed  = %d", m);
         if (FAN_SPEED == m) return;
         FAN_SPEED = m;
-    } else if ( strstr(topic, fade) != NULL ) {
-        char *istr;
-        //istr = strstr(topic, fade);
-        //if ( istr != NULL ) {
+    } else if ( strstr(topic, "fade") != NULL ) {
+          char *istr;
             ESP_LOGI("MQTT", "received fade  = %s", topic);
             istr = (char *)os_strstr(topic, "fade");     
             char ch[3];
@@ -178,9 +169,7 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
                 uint8_t channel = atoi(ch);
                 ESP_LOGI("MQTT", "fade channel  = %d", channel);
                 int32_t duty = atoi(dataBuf);
-                // ESP_LOGI("MQTT", "recived duty = %d", duty);
-                // ESP_LOGI("MQTT", "form topic: %s", topic); 
-                // ESP_LOGI("MQTT", "pwme: %d", pwme); 
+                if ( duty > 255 ) duty = 255;
                 if (channel < SENS.pwmc) {
                     fadeChannel(channel, duty);
                     //pwm_start();
@@ -231,17 +220,6 @@ void printFanControl(char *pbuf) {
     os_sprintf(HTTPBUFF, HTML_BUTTON_SPEED, 2, FAN_SPEED == 2, 2, "Speed 2");
     os_sprintf(HTTPBUFF, HTML_BUTTON_SPEED, 3, FAN_SPEED == 3, 3, "Speed 3");
     os_sprintf(HTTPBUFF, "</tr></table>");
-
-    // int duty;
-    // pwm_get_duty(0, &duty);
-    // os_sprintf(HTTPBUFF, "<br>Channel0 duty = %d", duty);
-
-    // int period;
-    // pwm_get_period(&period);
-    // os_sprintf(HTTPBUFF, "<br>Channel0 period = %d", period);
-
-    // os_sprintf(HTTPBUFF, "<br>pwm0 = %d", SENS.pwm[0]);
-
     printScript(pbuf);
 }
 
