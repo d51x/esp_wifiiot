@@ -1,4 +1,4 @@
-#define FW_VER "2.2"
+#define FW_VER "2.3"
 
 /*
 Options:
