@@ -52,23 +52,56 @@ int mapFromDuty(int duty, int period){
     return (duty * 255) / period;
 }
 
+int getNextMinDutyIdx(int duty){
+	// получить ближайшее минимальное значение по таблице
+	uint8_t i;
+	for ( i = BRIGHTNESS_STEPS-1; i >= 0 ; i--)
+	{
+		if ( brightness[i] > duty ) continue;
+		else break;
+	}	
+	//if ( i == 0 ) return;
+    return i;
+}
+
+int getNexMaxtDutyIdx(int duty){
+	uint8_t i;
+	for ( i = 0; i < BRIGHTNESS_STEPS; i++)
+	{
+		if ( brightness[i] <= duty ) continue;
+		else break;
+	}
+	
+	if ( i == BRIGHTNESS_STEPS ) i--;
+    return i;
+}
+
+void updateDuty(int ch, int duty){
+    ESP_LOGI("PWM", "set duty %d", duty);
+    pwm_set_duty(ch, duty);
+    pwm_start();
+    pauseTask(40);
+}
+
 void fadeUp(uint8_t ch, int from, int to, int period){
-    for (int i=from; i<=to; i++) {
-        int _duty = mapToDuty(i, period);
-        ESP_LOGI("PWM", "set duty %d ( %d )", i, _duty);
-        pwm_set_duty(ch, _duty);
-        pwm_start();
-        pauseTask(10);
+    int idx_from = getNexMaxtDutyIdx(from);
+    int idx_to = getNexMaxtDutyIdx(to);
+    ESP_LOGI("PWM", "fadeUp: found next max index from = %d value %d", idx_from, brightness[idx_from]);
+    ESP_LOGI("PWM", "fadeUp: found next max index to = %d value %d", idx_to, brightness[idx_to]);
+    for (int i = idx_from; i < idx_to; i++) {
+        int _duty = mapToDuty(brightness[i], period);
+        updateDuty(ch, _duty);
     }
 }
 
 void fadeDown(uint8_t ch, int from, int to, int period){
-    for (int i=from; i>=to; i--) {
-        int _duty = mapToDuty(i, period);
-        ESP_LOGI("PWM", "set duty %d ( %d )", i, _duty);
-        pwm_set_duty(ch, _duty);
-        pwm_start();
-        pauseTask(10);
+    int idx_from = getNextMinDutyIdx(from);
+    int idx_to = getNextMinDutyIdx(to);
+    ESP_LOGI("PWM", "fadeDown: found next min index from = %d value %d", idx_from, brightness[idx_from]);
+    ESP_LOGI("PWM", "fadeDown: found next min index to = %d value %d", idx_to, brightness[idx_to]);
+    for (int i = idx_from; i >= idx_to; i--) {
+        int _duty = mapToDuty(brightness[i], period);
+        updateDuty(ch, _duty);
     } 
 }
 
@@ -79,7 +112,7 @@ void fadeChannel(uint8_t ch, int duty){
 
     int _fromDuty;
     pwm_get_duty(ch, &_fromDuty);
-    
+
     int fromDuty = mapFromDuty(_fromDuty, period);
 
     
