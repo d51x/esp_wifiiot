@@ -158,17 +158,18 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
     char *topic = (char *)os_strstr(topicBuf, lwt);
     if (!topic) return;
     topic += lentopic;
+    char *fade = "fade";
+        
     ESP_LOGI("MQTT", "received topic  = %s", topic);
     if ( !strcoll(topic, "fanspeed") ) {
         int32_t m = atoi(dataBuf);
         ESP_LOGI("MQTT", "received fan speed  = %d", m);
         if (FAN_SPEED == m) return;
         FAN_SPEED = m;
-    } else {
-        char *fade = "fade";
+    } else if ( strstr(topic, fade) != NULL ) {
         char *istr;
-        istr = strstr(topic, fade);
-        if ( istr != NULL ) {
+        //istr = strstr(topic, fade);
+        //if ( istr != NULL ) {
             ESP_LOGI("MQTT", "received fade  = %s", topic);
             istr = (char *)os_strstr(topic, "fade");     
             char ch[3];
@@ -190,9 +191,8 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
                 ESP_LOGI("MQTT", "topic fade without index"); // TODO - по всем каналам сразу
                 return;
             }
-        } else {
-            ESP_LOGI("MQTT", "received topic  = %s", topic);
-        }
+    } else {
+        ESP_LOGI("MQTT", "received topic  = %s", topic);        
     }   
 }
 
