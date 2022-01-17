@@ -117,9 +117,9 @@ void fadeChannel(uint8_t ch, int duty){
         fadeDown(ch, fromDuty, duty, period);
     }
     //TODO: update pwmX to new duty
-    char topic[20];
-    sprintf(topic, "pwm%d", ch);
-    mqttSend(topic, duty);
+    // char topic[20];
+    // sprintf(topic, "pwm%d", ch);
+    // mqttSend(topic, duty);
 }
 
 void changeFanSpeed(int32_t speed) {
@@ -158,18 +158,13 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
     char *topic = (char *)os_strstr(topicBuf, lwt);
     if (!topic) return;
     topic += lentopic;
-    char *fade = "fade";
-        
-    ESP_LOGI("MQTT", "received topic  = %s", topic);
     if ( !strcoll(topic, "fanspeed") ) {
         int32_t m = atoi(dataBuf);
         ESP_LOGI("MQTT", "received fan speed  = %d", m);
         if (FAN_SPEED == m) return;
         FAN_SPEED = m;
-    } else if ( strstr(topic, fade) != NULL ) {
-        char *istr;
-        //istr = strstr(topic, fade);
-        //if ( istr != NULL ) {
+    } else if ( strstr(topic, "fade") != NULL ) {
+          char *istr;
             ESP_LOGI("MQTT", "received fade  = %s", topic);
             istr = (char *)os_strstr(topic, "fade");     
             char ch[3];
@@ -178,9 +173,7 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
                 uint8_t channel = atoi(ch);
                 ESP_LOGI("MQTT", "fade channel  = %d", channel);
                 int32_t duty = atoi(dataBuf);
-                // ESP_LOGI("MQTT", "recived duty = %d", duty);
-                // ESP_LOGI("MQTT", "form topic: %s", topic); 
-                // ESP_LOGI("MQTT", "pwme: %d", pwme); 
+                if ( duty > 255 ) duty = 255;
                 if (channel < SENS.pwmc) {
                     fadeChannel(channel, duty);
                     //pwm_start();
