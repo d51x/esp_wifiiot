@@ -69,7 +69,6 @@ int getNexMaxtDutyIdx(int duty){
 }
 
 void updateDuty(int ch, int duty){
-    //ESP_LOGI("PWM", "set duty %d", duty);
     //pwm_set_duty(ch, duty);
     //pwm_start();
     PWM_ALL_SET(ch, duty, 0);
@@ -80,9 +79,8 @@ void fadeUp(uint8_t ch, int from, int to, int period){
     int idx_from = getNexMaxtDutyIdx(from);
     int idx_to = getNexMaxtDutyIdx(to);
     for (int i = idx_from; i <= idx_to; i++) {
-        //int _duty = mapToDuty(brightness[i], period);
-        //updateDuty(ch, _duty);
-        updateDuty(ch, brightness[i]);
+        int _duty = brightness[i];
+        updateDuty(ch, _duty);
     }
 }
 
@@ -90,9 +88,8 @@ void fadeDown(uint8_t ch, int from, int to, int period){
     int idx_from = getNextMinDutyIdx(from);
     int idx_to = getNextMinDutyIdx(to);
     for (int i = idx_from; i >= idx_to; i--) {
-        //int _duty = mapToDuty(brightness[i], period);
-        //updateDuty(ch, _duty);
-        updateDuty(ch, brightness[i]);
+        int _duty = brightness[i];
+        updateDuty(ch, _duty);
     } 
 }
 
@@ -106,13 +103,11 @@ void fadeChannel(uint8_t ch, int duty){
     int fromDuty = mapFromDuty(_fromDuty, period);
 
     if ( duty > fromDuty) {
-        // ESP_LOGI("PWM", "inc duty from %d to %d", fromDuty, duty);
         fadeUp(ch, fromDuty, duty, period);
     } else {
-        // ESP_LOGI("PWM", "inc duty from %d to %d", fromDuty, duty);
         fadeDown(ch, fromDuty, duty, period);
     }
-    //TODO: update pwmX to new duty
+
     char topic[20];
     sprintf(topic, "pwm%d", ch);
     mqttSend(topic, duty);
@@ -172,7 +167,6 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
                 if ( duty > 255 ) duty = 255;
                 if (channel < SENS.pwmc) {
                     fadeChannel(channel, duty);
-                    //pwm_start();
                 } else {
                     ESP_LOGE("MQTT", "channel %d is not allowed", channel);    
                 }

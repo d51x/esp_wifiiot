@@ -8,6 +8,13 @@ Fan Speed: 0-3 fan speed
 ---
 ValdesCount: 1
 */
+
+/*
+ defined to 1 - own wifi-iot pwm methods
+ not defined - rtos pwm methods
+*/
+#define PWM_TYPE 1
+
 #define FAN_CTRL_TASK_DELAY 100
 
 #define FAN_SPEED1_GPIO 211
@@ -68,17 +75,25 @@ int getNexMaxtDutyIdx(int duty){
 }
 
 void updateDuty(int ch, int duty){
-    ESP_LOGI("PWM", "set duty %d", duty);
+#ifdef PWM_TYPE     
+    PWM_ALL_SET(ch, duty, 0);
+#else    
     pwm_set_duty(ch, duty);
     pwm_start();
+#endif    
     pauseTask(light_delay);
 }
 
 void fadeUp(uint8_t ch, int from, int to, int period){
     int idx_from = getNexMaxtDutyIdx(from);
     int idx_to = getNexMaxtDutyIdx(to);
+    int _duty = 0;
     for (int i = idx_from; i <= idx_to; i++) {
-        int _duty = mapToDuty(brightness[i], period);
+        #ifdef PWM_TYPE
+            _duty = brightness[i];
+        #else
+          _duty = mapToDuty(brightness[i], period);
+        #endif
         updateDuty(ch, _duty);
     }
 }
@@ -86,8 +101,13 @@ void fadeUp(uint8_t ch, int from, int to, int period){
 void fadeDown(uint8_t ch, int from, int to, int period){
     int idx_from = getNextMinDutyIdx(from);
     int idx_to = getNextMinDutyIdx(to);
+    int _duty = 0;
     for (int i = idx_from; i >= idx_to; i--) {
-        int _duty = mapToDuty(brightness[i], period);
+        #ifdef PWM_TYPE
+            _duty = brightness[i];
+        #else
+          _duty = mapToDuty(brightness[i], period);
+        #endif
         updateDuty(ch, _duty);
     } 
 }
@@ -106,7 +126,7 @@ void fadeChannel(uint8_t ch, int duty){
     } else {
         fadeDown(ch, fromDuty, duty, period);
     }
-    //TODO: update pwmX to new duty
+
     char topic[20];
     sprintf(topic, "pwm%d", ch);
     mqttSend(topic, duty);    
@@ -144,16 +164,10 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
             if ( duty > 255 ) duty = 255;
             if (channel < SENS.pwmc) {
                 fadeChannel(channel, duty);
-                //pwm_start();
             } else {
                 ESP_LOGE("MQTT", "channel %d is not allowed", channel);    
             }
-        } else {
-            ESP_LOGI("MQTT", "topic fade without index"); // TODO - по всем каналам сразу
-            return;
         }
-    } else {
-        ESP_LOGI("MQTT", "received topic  = %s", topic);        
     }    
 }
 
