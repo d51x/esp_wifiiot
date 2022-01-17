@@ -53,6 +53,7 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
     if( !strcoll(topic, "fanspeed")) {
         int32_t m = atoi(dataBuf);
         if (FAN_SPEED == m) return;
+        FAN_SPEED = m;
     }    
 }
 
