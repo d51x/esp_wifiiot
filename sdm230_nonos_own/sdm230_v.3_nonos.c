@@ -1,11 +1,8 @@
-//#include "driver/uart.h"
 	#include "../moduls/uart_register.h"
 	#include "../moduls/uart.h"
-	#include "../moduls/uart.c" // ??????
+	#include "../moduls/uart.c"
 
-	#define MQTTD
-
-	#define FW_VER "3.9"
+	#define FW_VER "3.11"
 	
 	/*
 	* SDM Task Delay
@@ -22,6 +19,8 @@
 		cfgdes[4] - время определения отсутствия перегрузки, сек, control_load_on_delay
 
 	*/
+	#define SENS sensors_param
+	#define SENSCFG SENS.cfgdes
 
 	#define ELECTRO_C20_V1_P1__E10						// читаем 20 раз подряд значение тока, затем 1 раз напряжение, затем 1 раз мощность, и каждое 10е чтение получаем значение потраченной энергии
 
@@ -39,8 +38,8 @@
 	#define CHECK_ERROR_COUNT			100
 
 	#define RESET_LOAD_GPIO				2
-	#define RESET_GPIO_OFF				0
-	#define RESET_GPIO_ON				1
+	#define GPIO_OFF				0
+	#define GPIO_ON				1
 
 	#define SDM_ADDR					0x0001
 	#define SDM_NO_COMMAND				0xFFFF
@@ -96,7 +95,6 @@
 	#define RESPONSE_SIZE sizeof(SDMCommand_response_t)
 	#define RESPONSE_DATA_SIZE 4
 
-#ifdef MQTTD
 	#define MQTT_SEND_INTERVAL 10 // sec
 	#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
 	#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
@@ -104,22 +102,21 @@
 	#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
 	#define OVERLOAD_MQTT_TOPIC_PARAM		"overload"
 	#define MQTT_PAYLOAD_BUF 20
-	char payload[MQTT_PAYLOAD_BUF];
-	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
-	MQTT_Client* mqtt_client;
-	static volatile os_timer_t mqtt_send_timer;	
+	#define mqtt_send_interval_sec SENSCFG[1]
+	//MQTT_Client* mqtt_client;
+	os_timer_t mqtt_send_timer;	
 	void mqtt_send_cb();
-#endif
 
 
-	uint8_t sdm_task_delay = SDM_PAUSE_TASK_MS;
+	#define sdm_task_delay SENSCFG[0]
+
 	uint32_t command = SDM_NO_COMMAND;
-	static volatile float voltage = 0;
-	static volatile float voltage_prev = 0;
-	static volatile float current = 0;
-	static volatile float power = 0;
-	static volatile float energy = 0;
-	static volatile float energy_resettable = 0;
+	float voltage = 0;
+	float voltage_prev = 0;
+	float current = 0;
+	float power = 0;
+	float energy = 0;
+	float energy_resettable = 0;
 
 	float energy_yesterday = 0;
 	float energy_today = 0;
@@ -128,16 +125,16 @@
 
 	uint8_t delayed_counter = DELAYED_START;
 
-	static volatile os_timer_t read_electro_timer;
-	static volatile os_timer_t system_start_timer;
-	static volatile os_timer_t overload_detect_timer;
-	static volatile os_timer_t overload_reset_timer;
+	os_timer_t read_electro_timer;
+	os_timer_t system_start_timer;
+	os_timer_t overload_detect_timer;
+	os_timer_t overload_reset_timer;
 
 
 	uint8_t overload = 0;										// флаг наличия перегрузки
-	uint16_t overload_treshold = OVERLOAD_TRESHOLD;					// valdes[0]
-	uint32_t overload_time = OVERLOAD_TIME;
-	uint32_t overload_detect_delay = OVERLOAD_DETECT_DELAY_MS;
+	#define overload_treshold SENSCFG[2]					// valdes[0]
+	#define overload_time SENSCFG[4] //= OVERLOAD_TIME;
+	#define overload_detect_delay SENSCFG[3] //= OVERLOAD_DETECT_DELAY_MS;
 
 	uint16_t error_count = 0;
 	uint8_t opt_saving = 0;
@@ -244,57 +241,74 @@ void read_buffer(){
 }
 
 
-void ICACHE_FLASH_ATTR mqtt_send_valdes(uint32_t val, uint8_t idx) {
-	if ( sensors_param.mqtten != 1 ) return;
-	if ( mqtt_client == NULL) return;
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", val);
-	system_soft_wdt_feed();	
-	MQTT_Publish(mqtt_client, "valuedes0", payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);
+void mqttSend(const char *topic, int32_t val){
+    char payload[MQTT_PAYLOAD_BUF];
+	memset(payload, 0, MQTT_PAYLOAD_BUF);
+	os_sprintf(payload, "%d", val);
+	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
 }
 
-uint8_t ICACHE_FLASH_ATTR get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
+void mqttSendFloat(const char *topic, float val, int divider){
+    char payload[MQTT_PAYLOAD_BUF];
+	memset(payload, 0, MQTT_PAYLOAD_BUF);
+	if (divider==0){
+		os_sprintf(payload, "%d", (int)val);
+	} else {
+		os_sprintf(payload, "%d.%d", (int)val, (int)(val*divider) % divider);
+	}
+	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
+}
 
-	uint8_t reinit = 0;
-	//reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
-	sdm_task_delay = (sensors_param.cfgdes[0] > 0) ? sensors_param.cfgdes[0] : SDM_PAUSE_TASK_MS; 
+void ICACHE_FLASH_ATTR get_config() {
 
-	#ifdef MQTTD	
-		//reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
-		mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
-	#endif	
-
+	//-----------------------------------------------------------
+	// корректировка неверно введенных значений
+	uint8_t needSave = 0;
+	if (sdm_task_delay == 0) {
+		sdm_task_delay = SDM_PAUSE_TASK_MS;
+		needSave = 1;
+	}
+	
+	if (mqtt_send_interval_sec < 2) {
+		mqtt_send_interval_sec = sensors_param.mqttts;
+		needSave = 1;
+	}
+	//----------------------------------------------------------
+	
 	uint16_t prev_treshhold = overload_treshold;
-	overload_treshold = (sensors_param.cfgdes[2] == 0 || sensors_param.cfgdes[2] > 300) ? OVERLOAD_TRESHOLD :  sensors_param.cfgdes[2];
+	if (overload_treshold == 0 || overload_treshold > 300) {
+		overload_treshold = OVERLOAD_TRESHOLD;
+		needSave = 1;
+	}
 
 	if ( prev_treshhold != overload_treshold ) {
 		// поменялось значение в настройках, надо обновить valdes[0]
 		prev_treshhold = overload_treshold;
 		valdes[0] = overload_treshold;
-		#ifdef MQTTD
-			mqtt_send_valdes(valdes[0], 0);
-		#endif		
+		mqttSend("valdes1", valdes[0]);
 	} else {
 		// значение не менялось, но могло поменяться в valdes[0]
 		uint16_t tmp_current_treshold = valdes[0];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
 		if ( tmp_current_treshold > 0 && tmp_current_treshold != overload_treshold ) {  
 			// значение в valdes[0] отличается от текущего и в опциях
 			overload_treshold = tmp_current_treshold;
-			sensors_param.cfgdes[2] = overload_treshold;
-			opt_saving = 1;
-			system_soft_wdt_feed();
-			SAVEOPT
-			os_delay_us(500);
-			system_soft_wdt_feed();
-			opt_saving = 0;
+			needSave = 1;
 		}
 	}
 
-	overload_detect_delay = (sensors_param.cfgdes[3] == 0) ? OVERLOAD_DETECT_DELAY_MS : sensors_param.cfgdes[3];
-	overload_time = (sensors_param.cfgdes[4] == 0) ? OVERLOAD_TIME : sensors_param.cfgdes[4];
+	if (overload_detect_delay == 0) {
+		overload_detect_delay = OVERLOAD_DETECT_DELAY_MS;
+		needSave = 1;
+	}
 
-	return reinit;
+	if (overload_time == 0) {
+		overload_time = OVERLOAD_TIME;
+		needSave = 1;
+	}
+
+	if ( needSave == 1) {
+		SAVEOPT;
+	}
 }
 
 
@@ -329,7 +343,7 @@ void ICACHE_FLASH_ATTR startfunc(){
 	uart_init(BIT_RATE_9600);	  
 	ETS_UART_INTR_ATTACH(read_buffer, NULL);
 
-	get_config_values(0);
+	get_config();
 
 	// читаем rtc
 	system_rtc_mem_read(70, &rtc_data, sizeof(rtc_data_t));
@@ -355,7 +369,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		// выполнение кода каждые 30 секунд
 	}
 	
-	get_config_values(0);
+	get_config();
 
 	if ( delayed_counter > 0 ) { 
 		delayed_counter--;	
@@ -448,7 +462,7 @@ void system_start_cb( ){
 	os_timer_arm(&overload_detect_timer, overload_detect_delay, 1);
 
 
-	mqtt_client = (MQTT_Client*) &mqttClient;
+	//mqtt_client = (MQTT_Client*) &mqttClient;
 	os_timer_disarm(&mqtt_send_timer);
 	os_timer_setfn(&mqtt_send_timer, (os_timer_func_t *)mqtt_send_cb, NULL);
 	os_timer_arm(&mqtt_send_timer, mqtt_send_interval_sec * 1000, 1);
@@ -602,39 +616,15 @@ void read_electro_cb()
 	os_timer_arm(&read_electro_timer, sdm_task_delay, 0);		
 }
 
-#ifdef MQTTD
+
 void mqtt_send_cb() {
-	if ( sensors_param.mqtten != 1 ) return;
-
-	system_soft_wdt_feed();
-
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d.%d", (int)voltage, 		(int)(voltage*10) % 10);
-	MQTT_Publish(mqtt_client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);
-
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d.%d", (uint16_t)current, 		(uint16_t)(current*100) % 100);
-	MQTT_Publish(mqtt_client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);
-
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", (int)power);
-	MQTT_Publish(mqtt_client, POWER_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);
-
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	//os_sprintf(payload,"%d", (int)energy);
-	os_sprintf(payload,"%d.%d", (uint32_t)energy, 		(uint32_t)(energy*100) % 100);
-	MQTT_Publish(mqtt_client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);
-
-	os_memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", (int)overload);
-	MQTT_Publish(mqtt_client, OVERLOAD_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	os_delay_us(20);	
+	mqttSendFloat(VOLTAGE_MQTT_TOPIC_PARAM, voltage, 10);
+	mqttSendFloat(CURRENT_MQTT_TOPIC_PARAM, current, 10);
+	mqttSendFloat(POWER_MQTT_TOPIC_PARAM, power, 0);
+	mqttSendFloat(ENERGY_MQTT_TOPIC_PARAM, energy, 100);
+	mqttSend(OVERLOAD_MQTT_TOPIC_PARAM, overload);	
 }	
-#endif
+
 
 void overload_detect_cb()
 {
@@ -644,7 +634,7 @@ void overload_detect_cb()
 	{
 		// есть перегрузка по току
 		overload = 1;
-		GPIO_ALL( RESET_LOAD_GPIO, RESET_GPIO_ON);
+		GPIO_ALL( RESET_LOAD_GPIO, GPIO_ON);
 
 		// запустим единичный overload_reset_timer, который обнулит флаг перегрузки и выставит gpio2 в 0
 		os_timer_disarm(&overload_reset_timer);
@@ -659,7 +649,7 @@ void overload_detect_cb()
 void overload_reset_cb()
 {
 	overload = 0;
-	GPIO_ALL( RESET_LOAD_GPIO, RESET_GPIO_OFF);
+	GPIO_ALL( RESET_LOAD_GPIO, GPIO_OFF);
 }
 
 void webfunc(char *pbuf) {
