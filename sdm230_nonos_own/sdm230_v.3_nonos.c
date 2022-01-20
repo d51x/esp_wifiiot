@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.12"
+	#define FW_VER "3.13"
 	
 	/*
 	* SDM Task Delay
@@ -33,7 +33,6 @@
 
 	#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
 	#define SDM_PAUSE_TASK_MS 					50
-	#define MQTT_PAUSE_TASK_MS 					50
 
 	#define CHECK_ERROR_COUNT			100
 
@@ -95,12 +94,18 @@
 	#define RESPONSE_SIZE sizeof(SDMCommand_response_t)
 	#define RESPONSE_DATA_SIZE 4
 
+	#define VOLTAGE_TOPIC_L		"l_pmv"
+	#define CURRENT_TOPIC_L		"l_pmc"
+	#define POWER_TOPIC_L			"l_pmw"
+	#define ENERGY_TOPIC_L		"l_pmwh"
+	#define OVERLOAD_TOPIC_L		"l_overload"
+
 	#define MQTT_SEND_INTERVAL 10 // sec
-	#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
-	#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
-	#define POWER_MQTT_TOPIC_PARAM		"pmw"
-	#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
-	#define OVERLOAD_MQTT_TOPIC_PARAM		"overload"
+	#define VOLTAGE_TOPIC		"pmv"
+	#define CURRENT_TOPIC		"pmc"
+	#define POWER_TOPIC			"pmw"
+	#define ENERGY_TOPIC		"pmwh"
+	#define OVERLOAD_TOPIC		"overload"
 	#define MQTT_PAYLOAD_BUF 20
 	#define mqtt_send_interval_sec SENSCFG[1]
 	//MQTT_Client* mqtt_client;
@@ -137,7 +142,17 @@
 	#define overload_detect_delay SENSCFG[3] //= OVERLOAD_DETECT_DELAY_MS;
 
 	uint16_t error_count = 0;
-	uint8_t opt_saving = 0;
+	
+	uint32_t getVoltageInt(){return (uint32_t)(voltage * 10);}
+	uint32_t getCurrentInt(){return (uint32_t)(current * 100);}
+	uint32_t getPowerInt(){return (uint32_t)(power * 100);}
+	uint32_t getEnergyInt(){return (uint32_t)(energy * 100);}
+	
+#define ADDLISTSENS {200, LSENSFL1 | LS_MODE_VOLT | LSENS32BIT | LSENSFUNS, "Voltage", VOLTAGE_TOPIC_L, getVoltageInt, NULL},\
+					{201, LSENSFL2 | LS_MODE_CURRENT | LSENS32BIT | LSENSFUNS, "Current", CURRENT_TOPIC_L, getCurrentInt, NULL},\
+					{202, LSENSFL2 | LS_MODE_WATT | LSENS32BIT | LSENSFUNS, "Power", POWER_TOPIC_L, getPowerInt, NULL},\
+					{203, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "Energy", ENERGY_TOPIC_L, getEnergyInt, NULL},\
+					{204, LSENSFL0, "Overload", OVERLOAD_TOPIC_L, &overload, NULL},\
 
 	void system_start_cb( );
 	void read_electro_cb();	
@@ -471,7 +486,6 @@ void ICACHE_FLASH_ATTR system_start_cb( ){
 }
 
 void ICACHE_FLASH_ATTR sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
-	if ( opt_saving ) return;
 	SDMCommand_request_t sdm;
 	sdm.addr = addr;
 	sdm.func_code = fcode;
@@ -618,11 +632,11 @@ void ICACHE_FLASH_ATTR read_electro_cb()
 
 
 void ICACHE_FLASH_ATTR mqtt_send_cb() {
-	mqttSendFloat(VOLTAGE_MQTT_TOPIC_PARAM, voltage, 10);
-	mqttSendFloat(CURRENT_MQTT_TOPIC_PARAM, current, 10);
-	mqttSendFloat(POWER_MQTT_TOPIC_PARAM, power, 0);
-	mqttSendFloat(ENERGY_MQTT_TOPIC_PARAM, energy, 100);
-	mqttSend(OVERLOAD_MQTT_TOPIC_PARAM, overload);	
+	mqttSendFloat(VOLTAGE_TOPIC, voltage, 10);
+	mqttSendFloat(CURRENT_TOPIC, current, 10);
+	mqttSendFloat(POWER_TOPIC, power, 0);
+	mqttSendFloat(ENERGY_TOPIC, energy, 100);
+	mqttSend(OVERLOAD_TOPIC, overload);	
 }	
 
 
@@ -657,8 +671,6 @@ void webfunc(char *pbuf) {
 	if ( delayed_counter > 0 ) {
 		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд", delayed_counter);
 	}
-	
-	if ( opt_saving ) os_sprintf(HTTPBUFF,"<p style='color: red;'><small><b>Идет сохранение настроек!</b></small></p>"); 
 	
 	os_sprintf(HTTPBUFF, "<table width='100%%' cellpadding='2' cellspacing='2' cols='2'>"
 							"<tr>"
