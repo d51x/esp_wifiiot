@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.11"
+	#define FW_VER "3.12"
 	
 	/*
 	* SDM Task Delay
@@ -161,24 +161,24 @@
 	
 	#define millis() (uint32_t) (micros() / 1000ULL) 
 
-void calc_min(const float value, dt_value_t *min) {
+void ICACHE_FLASH_ATTR calc_min(const float value, dt_value_t *min) {
 	if ( value == 0 ) return;
 	if ( min->value == 0 ) min->value = value;
 	else if ( min->value > value ) min->value = value;
 }
 
-void calc_max(const float value, dt_value_t *max) {
+void ICACHE_FLASH_ATTR calc_max(const float value, dt_value_t *max) {
 	if ( value == 0 ) return;
 	// max
 	if ( max->value == 0 ) max->value = value;
 	else if ( max->value < value ) max->value = value;
 }
 
-void send_buffer(uint8_t *buffer, uint8_t len){
+void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len){
 	uart0_tx_buffer(buffer, len);
 }
 
-void read_buffer(){	
+void ICACHE_FLASH_ATTR read_buffer(){	
 	static char rx_buf[125];
 	static uint8_t i = 0;
 
@@ -241,14 +241,14 @@ void read_buffer(){
 }
 
 
-void mqttSend(const char *topic, int32_t val){
+void ICACHE_FLASH_ATTR mqttSend(const char *topic, int32_t val){
     char payload[MQTT_PAYLOAD_BUF];
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	os_sprintf(payload, "%d", val);
 	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
 }
 
-void mqttSendFloat(const char *topic, float val, int divider){
+void ICACHE_FLASH_ATTR mqttSendFloat(const char *topic, float val, int divider){
     char payload[MQTT_PAYLOAD_BUF];
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	if (divider==0){
@@ -312,7 +312,7 @@ void ICACHE_FLASH_ATTR get_config() {
 }
 
 
-uint32_t calcCRC32(const uint8_t *data, uint16_t sz) {
+uint32_t ICACHE_FLASH_ATTR calcCRC32(const uint8_t *data, uint16_t sz) {
   // Обрабатываем все данные, кроме последних четырёх байтов,
   // где и будет храниться проверочная сумма.
   size_t length = sz-4;
@@ -451,7 +451,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 
 }
 
-void system_start_cb( ){
+void ICACHE_FLASH_ATTR system_start_cb( ){
 
 	os_timer_disarm(&read_electro_timer);
 	os_timer_setfn(&read_electro_timer, (os_timer_func_t *)read_electro_cb, NULL);
@@ -470,7 +470,7 @@ void system_start_cb( ){
 	command = SDM_NO_COMMAND;
 }
 
-void sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
+void ICACHE_FLASH_ATTR sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
 	if ( opt_saving ) return;
 	SDMCommand_request_t sdm;
 	sdm.addr = addr;
@@ -489,7 +489,7 @@ void sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
 	os_delay_us(20);
 }
 
-float sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
+float ICACHE_FLASH_ATTR sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
 	uint8_t fcode = 4;
 	uint8_t i;
 	uint8_t data[RESPONSE_DATA_SIZE];
@@ -506,7 +506,7 @@ float sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
 	return value;
 }
 
-uint16_t sdm_crc(uint8_t *data, uint8_t sz) {
+uint16_t ICACHE_FLASH_ATTR sdm_crc(uint8_t *data, uint8_t sz) {
 	uint16_t _crc, _flag;
 	_crc = 0xFFFF;
 	uint8_t i,j;
@@ -522,27 +522,27 @@ uint16_t sdm_crc(uint8_t *data, uint8_t sz) {
   	return _crc;	
 }
 
-void request_voltage(uint8_t addr) {
+void ICACHE_FLASH_ATTR request_voltage(uint8_t addr) {
 	sdm_send(addr, 4, SDM_VOLTAGE);
 }
 
-void request_current(uint8_t addr) {
+void ICACHE_FLASH_ATTR request_current(uint8_t addr) {
 	sdm_send(addr, 4, SDM_CURRENT);
 }
 
-void request_power(uint8_t addr) {
+void ICACHE_FLASH_ATTR request_power(uint8_t addr) {
 	sdm_send(addr, 4, SDM_POWER);
 }
 
-void request_energy(uint8_t addr) {
+void ICACHE_FLASH_ATTR request_energy(uint8_t addr) {
 	sdm_send(addr, 4, SDM_ENERGY);
 }
 
-void request_energy_resettable(uint8_t addr) {
+void ICACHE_FLASH_ATTR request_energy_resettable(uint8_t addr) {
 	sdm_send(addr, 4, SDM_ENERGY_RESETTABLE);
 }
 
-void read_electro_params_c3_v1_c3_p1__e120(uint8_t counter) {
+void ICACHE_FLASH_ATTR read_electro_params_c3_v1_c3_p1__e120(uint8_t counter) {
 		int m = counter % 4;
 		if ( counter == 119 ) {
 			command = SDM_ENERGY;
@@ -566,7 +566,7 @@ void read_electro_params_c3_v1_c3_p1__e120(uint8_t counter) {
 		}
 }
 
-void read_electro_params_c20vp__er_10sec(uint8_t counter) {
+void ICACHE_FLASH_ATTR read_electro_params_c20vp__er_10sec(uint8_t counter) {
 	// c20vp - ток 20 раз подряд, 1 раз, 1 раз
 	// er_60sec - расход 1 раз в 10 сек
 	// 20 * 50 msec = 1000 msec, => 20 раз/сек
@@ -594,7 +594,7 @@ void read_electro_params_c20vp__er_10sec(uint8_t counter) {
 	}
 }
 
-void read_electro_cb()
+void ICACHE_FLASH_ATTR read_electro_cb()
 {
 	static uint8_t el_cnt = 0;
 	if ( command == SDM_NO_COMMAND) {	
@@ -617,7 +617,7 @@ void read_electro_cb()
 }
 
 
-void mqtt_send_cb() {
+void ICACHE_FLASH_ATTR mqtt_send_cb() {
 	mqttSendFloat(VOLTAGE_MQTT_TOPIC_PARAM, voltage, 10);
 	mqttSendFloat(CURRENT_MQTT_TOPIC_PARAM, current, 10);
 	mqttSendFloat(POWER_MQTT_TOPIC_PARAM, power, 0);
@@ -626,7 +626,7 @@ void mqtt_send_cb() {
 }	
 
 
-void overload_detect_cb()
+void ICACHE_FLASH_ATTR overload_detect_cb()
 {
 	//  отрабатывает каждые 50 мсек
 
@@ -659,11 +659,6 @@ void webfunc(char *pbuf) {
 	}
 	
 	if ( opt_saving ) os_sprintf(HTTPBUFF,"<p style='color: red;'><small><b>Идет сохранение настроек!</b></small></p>"); 
-	//os_sprintf(HTTPBUFF,"<p><small><b>valdes[0]:</b> %d</small></p>", valdes[0]); 
-	//os_sprintf(HTTPBUFF,"<p><small><b>sensros_param[3]:</b> %d</small></p>", sensors_param.cfgdes[3]); 
-	//os_sprintf(HTTPBUFF,"<p><small><b>current tr:</b> %d</small></p>", overload_treshold); 
-	//os_sprintf(HTTPBUFF,"<p><small><b>Задержка определения перегрузки:</b> %d</small></p>", control_current_delay); 
-	//os_sprintf(HTTPBUFF,"<p><small><b>Задержка после пропадания перегрузки:</b> %d</small></p>", control_load_on_delay); 
 	
 	os_sprintf(HTTPBUFF, "<table width='100%%' cellpadding='2' cellspacing='2' cols='2'>"
 							"<tr>"
