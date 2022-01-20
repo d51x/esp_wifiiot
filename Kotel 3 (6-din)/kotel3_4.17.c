@@ -1,7 +1,7 @@
 #define FW_VER "4.17"
 
 /*
-Количество настроек
+РљРѕР»РёС‡РµСЃС‚РІРѕ РЅР°СЃС‚СЂРѕРµРє
 Kotel1 gpio, Kotel2 gpio, Pump1 gpio, Pump2 gpio, ESC gpio, Vent gpio, Night(h), Day(h), BacklightTDelay, Kotel1LED, Kotel2LED, KotelWorkLed, PumpWorkLed, ScheduleLed, VentLed, GlobalTempSet, Buzzer GPIO, PumpMode, PumpTimeout
 */
 
@@ -1182,13 +1182,13 @@ void controlIndications(){
 #define html_button_mode "<td><a href='#' onclick='wm(%d)'><div class='g_%d k kk fll wm' id='v%d'>%s</div></a></td>"
 
 void printKotel(char *pbuf){
- os_sprintf(HTTPBUFF,"<table><tr><td>Temperature:"TDE"<b>%d.%d °C</b></td></tr><tr><td>Mode:</td>",curT/10,curT%10);
+ os_sprintf(HTTPBUFF,"<table><tr><td>Temperature:"TDE"<b>%d.%d В°C</b></td></tr><tr><td>Mode:</td>",curT/10,curT%10);
  os_sprintf(HTTPBUFF,html_button_mode,MODE_MANUAL,workMode==MODE_MANUAL,MODE_MANUAL,"Manual");
  os_sprintf(HTTPBUFF,html_button_mode,MODE_AUTO,workMode==MODE_AUTO,MODE_AUTO,"Auto");
  os_sprintf(HTTPBUFF,html_button_mode,MODE_KOTEL1,workMode==MODE_KOTEL1,MODE_KOTEL1,"Kotel1");
  os_sprintf(HTTPBUFF,html_button_mode,MODE_KOTEL2,workMode==MODE_KOTEL2,MODE_KOTEL2,"Kotel2");
  os_sprintf(HTTPBUFF,"</tr><tr><td>Schedule:</td><td><a id='ushd' href='#' data-val='%d' onclick='schd(this.dataset.val)'><div class='g_%d k kk fll' id='sch' data-text='%s'>%s</div></a></td>",!schedule,schedule,schedule?"Off":"On",schedule?"On":"Off");
- os_sprintf(HTTPBUFF,"<td colspan=2 align=right>%s tempset:</td><td><b>%d.%d °C</b></td></tr>",schedule?"Schedule":"Global",schedule?schedTempSet/10:TEMPSET/10,schedule?schedTempSet%10:TEMPSET%10);
+ os_sprintf(HTTPBUFF,"<td colspan=2 align=right>%s tempset:</td><td><b>%d.%d В°C</b></td></tr>",schedule?"Schedule":"Global",schedule?schedTempSet/10:TEMPSET/10,schedule?schedTempSet%10:TEMPSET%10);
  if(schedule){
   char w[32]="";
   if(schedule_id>-1 && schedule_id<maxscher){
@@ -1306,17 +1306,17 @@ void timerfunc(u32_t t){
 
 void webfunc(char *pbuf){
  printKotel(pbuf);
- char s[45]="Ручное управление";
+ char s[60]="Р СѓС‡РЅРѕРµ СѓРїСЂР°РІР»РµРЅРёРµ";
  u16_t t1=THERMO_SETPOINT(3)-THERMO_HYSTERESIS(3);
  u16_t t2=THERMO_SETPOINT(4)-THERMO_HYSTERESIS(4);
  switch(PUMP_MODE){
-  case PUMP_MODE_1:strncpy(s,45,"по реле котла");break;    
-  case PUMP_MODE_2:snprintf(s,45,"через %d сек после выкл котла",PUMP_OFF_TIMEOUT/1000);break;    
-  case PUMP_MODE_3:snprintf(s,45,"по T-обратки #1 %d.%d° #2 %d.%d°",t1/10,t1%10,t2/10,t2%10);break;  
+  case PUMP_MODE_1:snprintf(s,60,"РїРѕ СЂРµР»Рµ РєРѕС‚Р»Р°");break;    
+  case PUMP_MODE_2:snprintf(s,60,"С‡РµСЂРµР· %d СЃРµРє РїРѕСЃР»Рµ РІС‹РєР» РєРѕС‚Р»Р°",PUMP_OFF_TIMEOUT/1000);break;    
+  case PUMP_MODE_3:snprintf(s,60,"РїРѕ T-РѕР±СЂР°С‚РєРё #1 %d.%dВ° #2 %d.%dВ°",t1/10,t1%10,t2/10,t2%10);break;  
   default:break;  
  }
 
- os_sprintf(HTTPBUFF,"<br>Режим насоса: %d. Выкл: %s</small>",PUMP_MODE, s);
+ os_sprintf(HTTPBUFF,"<br>Р РµР¶РёРј РЅР°СЃРѕСЃР°: %d. Р’С‹РєР»: %s</small>",PUMP_MODE, s);
  printScript(pbuf);
  printFuelPump(pbuf);
  os_sprintf(HTTPBUFF,"<br><small>Version: %s</small>",FW_VER); 

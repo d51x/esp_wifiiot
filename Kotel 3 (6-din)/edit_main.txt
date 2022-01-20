@@ -1,0 +1,1 @@
+Flow: <b>_DSW1_°</b>C Return: <b>_DSW2_°</b>C Street: <b>_D2D0201_°</b>C<hr>1. LivingRoom: <b>_D2D0109_°</b>C Bathroom: <b>_D2D0117_°</b>C<hr>2. Bedroom: <b>_D2D0101_°</b>C Child1: <b>_D2D0105_°</b>C Child2: <b>_D2D0113_°</b>C<hr>
