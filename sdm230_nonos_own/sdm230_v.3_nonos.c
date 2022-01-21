@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.15.3"
+	#define FW_VER "3.16.2"
 	
 	/*
 	Глобальные переменные: 2
@@ -48,8 +48,8 @@
 
 	#define ELECTRO_C20_V1_P1__E10						// читаем 20 раз подряд значение тока, затем 1 раз напряжение, затем 1 раз мощность, и каждое 10е чтение получаем значение потраченной энергии
 
-	#define OVERLOAD_DETECT_DELAY_MS 			500		// мсек, интервал определения перегрузки
-	#define OVERLOAD_TIME 						20		// сек,  интервал длительности перегрузки
+	#define OVERLOAD_DETECT_DELAY_MS 			100		// мсек, интервал определения перегрузки
+	#define OVERLOAD_TIME 						180		// сек,  интервал длительности перегрузки
 	#define CURRENT_OVERLOAD_TRESHOLD 			200		// A*10
 	#define POWER_OVERLOAD_TRESHOLD 			5000	// Ватт
 	#define DELAYED_START						60   	// sec
@@ -57,7 +57,7 @@
 	#define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
 
 	#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
-	#define SDM_PAUSE_TASK_MS 					50
+	#define SDM_PAUSE_TASK_MS 					100
 
 	#define CHECK_ERROR_COUNT			100
 
@@ -164,14 +164,20 @@
 
 	uint32_t command = SDM_NO_COMMAND;
 
-	float voltage = 0;
-	float voltage_prev = 0;
-	float current = 0;
-	float power = 0;
-	float energy = 0;
-	float energy_resettable = 0;
+	volatile dt_value_t volt_min;
+	volatile dt_value_t volt_max;
+	volatile dt_value_t curr_max;
+
+	volatile float voltage = 0;
+	volatile float voltage_prev = 0;
+	volatile float current = 0;
+	volatile float power = 0;
+	volatile float energy = 0;
+	volatile float energy_resettable = 0;
 
 	uint8_t delayed_counter = DELAYED_START;
+
+	uint8_t startAfterPowerUp = 0;
 
 	os_timer_t read_electro_timer;
 	os_timer_t system_start_timer;
@@ -230,28 +236,11 @@ uint32_t getTimeLocSeconds(){
 	return time_loc.hour * 60 * 60 + time_loc.min * 60 + time_loc.sec;
 }
 
-void ICACHE_FLASH_ATTR calc_min(const float value, dt_value_t *min) {
-	if ( value == 0 ) return;
-	if ( min->value == 0 || min->value > value) {
-		min->value = value;
-		min->dt = getTimeLocSeconds(); 
-	}
-}
-
-void ICACHE_FLASH_ATTR calc_max(const float value, dt_value_t *max) {
-	if ( value == 0 ) return;
-	// max
-	if ( max->value == 0 || max->value < value ) {
-		max->value = value;
-		max->dt = getTimeLocSeconds(); 
-	}
-}
-
 void ICACHE_FLASH_ATTR send_buffer(uint8_t *buffer, uint8_t len){
 	uart0_tx_buffer(buffer, len);
 }
 
-void ICACHE_FLASH_ATTR read_buffer(){	
+void read_buffer(){	
 	static char rx_buf[125];
 	static uint8_t i = 0;
 
@@ -279,8 +268,18 @@ void ICACHE_FLASH_ATTR read_buffer(){
 					#else
 						voltage = ( v == 0 ) ? voltage : v;
 					#endif
-					calc_min( voltage, &rtc_data.voltage_min);
-					calc_max( voltage, &rtc_data.voltage_max);
+					if ( volt_min.value == 0) {
+						volt_min.value = voltage;
+						volt_min.dt = getTimeLocSeconds();
+					}
+					if ( voltage > 0 && voltage < volt_min.value) {
+						volt_min.value = voltage;
+						volt_min.dt = getTimeLocSeconds();
+					}
+					if ( voltage > volt_max.value) {
+						volt_max.value = voltage;
+						volt_max.dt = getTimeLocSeconds();
+					}
 					break;
 				case SDM_CURRENT:
 					#ifdef CUT_OFF_INCORRECT_VALUE
@@ -288,7 +287,10 @@ void ICACHE_FLASH_ATTR read_buffer(){
 					#else
 						current = ( v == 0) ? current : v;		
 					#endif
-					calc_max( current, &rtc_data.current_max);
+					if ( current > curr_max.value) {
+						curr_max.value = current;
+						curr_max.dt = getTimeLocSeconds();
+					}
 					break;
 				case SDM_POWER:
 					#ifdef CUT_OFF_INCORRECT_VALUE
@@ -358,7 +360,7 @@ void ICACHE_FLASH_ATTR get_config() {
 		// поменялось значение в настройках, надо обновить valdes[0]
 		prev_treshhold = current_overload_treshold;
 		valdes[0] = current_overload_treshold;
-		mqttSend("valdes1", valdes[0]);
+		//mqttSend("valdes1", valdes[0]);
 	} else {
 		// значение не менялось, но могло поменяться в valdes[0]
 		uint16_t tmp_treshold = valdes[0];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
@@ -381,7 +383,7 @@ void ICACHE_FLASH_ATTR get_config() {
 		// поменялось значение в настройках, надо обновить valdes[1]
 		prev_treshhold = power_overload_treshold;
 		valdes[1] = power_overload_treshold;
-		mqttSend("valdes2", valdes[1]);
+		//mqttSend("valdes2", valdes[1]);
 	} else {
 		// значение не менялось, но могло поменяться в valdes[1]
 		uint16_t tmp_treshold = valdes[1];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
@@ -431,9 +433,31 @@ uint32_t ICACHE_FLASH_ATTR calcCRC32(const uint8_t *data, uint16_t sz) {
   return crc;
 }
 
+void updateRTCData(){
+	if ( rtc_data.energy_today == 0) rtc_data.energy_today = ENERGY_TODAY;
+	if ( rtc_data.energy_yesterday == 0) rtc_data.energy_yesterday = ENERGY_YESTERDAY;
+	if ( rtc_data.energy_00 == 0) rtc_data.energy_00 = ENERGY_00;
+	if ( rtc_data.energy_07 == 0) rtc_data.energy_07 = ENERGY_07;
+	if ( rtc_data.energy_23 == 0) rtc_data.energy_23 = ENERGY_23;
+	if ( rtc_data.energy_00_prev == 0) rtc_data.energy_00_prev = ENERGY_00_Y;
+	if ( rtc_data.energy_07_prev == 0) rtc_data.energy_07_prev = ENERGY_07_Y;
+	if ( rtc_data.energy_23_prev == 0) rtc_data.energy_23_prev = ENERGY_23_Y;
+}
+
+void saveToRTC(){
+	rtc_data.crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
+	system_rtc_mem_write(70, &rtc_data, sizeof(rtc_data_t));
+}
+
 void ICACHE_FLASH_ATTR startfunc(){
 
 	overload = 0;
+	volt_min.value = 0;
+	volt_min.dt = 0;
+	volt_max.value = 0;
+	volt_max.dt = 0;
+	curr_max.value = 0;
+	curr_max.dt = 0;
 
 	// выполняется один раз при старте модуля.
 	uart_init(BIT_RATE_9600);	  
@@ -446,12 +470,16 @@ void ICACHE_FLASH_ATTR startfunc(){
 	// проверяем crc
 	uint32_t crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
 	if ( crc32 != rtc_data.crc32 ) {
-		// кривые данные, обнулим
+		// кривые данные (т.е. пропадало питание), обнулим
 		os_memset(&rtc_data, 0, sizeof(rtc_data_t));
-		crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
-		rtc_data.crc32 = crc32;
-		// пишем в rtc обнуленные данные
-		system_rtc_mem_write(70, &rtc_data, sizeof(rtc_data_t));
+
+		startAfterPowerUp = 1;
+
+		//присвоим rtc_data значения из cfgdes
+		updateRTCData();
+		saveToRTC();
+	} else {
+		startAfterPowerUp = 0;
 	}
 
 	// если значения сохраненных данных меньше чем данные из rtc
@@ -483,14 +511,14 @@ void ICACHE_FLASH_ATTR reset_energy_rate(int32_t value){
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 	if ( safemode ) return;
-	if(timersrc%30==0){
-		// выполнение кода каждые 30 секунд
-	}
-	
-	get_config();
 
+	//if(timersrc%5==0){
+		get_config();
+	//}
+	
 	if ( delayed_counter > 0 ) { 
 		delayed_counter--;	
+		return; // не будем далее выполнять код, пока счетчик отложенного запуска не будет 0
 	}	
 
 	// проверяем на зависание чтения (последнее время чтение данных зависает примерно через 4 дня и данные не изменяются)
@@ -513,18 +541,25 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		*/
 	}
 
-
-	// корректировка нулевых значений счетчиков
-	// if ( rtc_data.energy_today == 0) rtc_data.energy_today = ENERGY_TODAY;
-	// if ( rtc_data.energy_yesterday == 0) rtc_data.energy_yesterday = ENERGY_YESTERDAY;
-	// if ( rtc_data.energy_00 == 0) rtc_data.energy_00 = ENERGY_00;
-	// if ( rtc_data.energy_07 == 0) rtc_data.energy_07 = ENERGY_07;
-	// if ( rtc_data.energy_23 == 0) rtc_data.energy_23 = ENERGY_23;
-	// if ( rtc_data.energy_00_prev == 0) rtc_data.energy_00_prev = ENERGY_00_Y;
-	// if ( rtc_data.energy_07_prev == 0) rtc_data.energy_07_prev = ENERGY_07_Y;
-	// if ( rtc_data.energy_23_prev == 0) rtc_data.energy_23_prev = ENERGY_23_Y;
-
 	// вычисляем расход
+	if ( energy < 1.0f ) return; // еще не получили показания счетчика
+
+	int32_t _energy = (int32_t) (energy * 100);
+	//if ( _energy < 1.0f ) _energy = rtc_data.energy_today;
+
+	ENERGY_TODAY = _energy - ENERGY_00;
+	if (  ENERGY_TODAY < 0 ) ENERGY_TODAY = 0;
+
+	if ( time_loc.hour < 7)
+	{
+		ENERGY_07 = _energy; 
+	} 
+
+	if ( time_loc.hour < 23)
+	{
+		ENERGY_23 = _energy; 
+	}
+
 	if ( time_loc.hour == 23 && time_loc.min == 59 && time_loc.sec == 59 )
 	{
 		// запомним предыдущие значения
@@ -534,7 +569,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		ENERGY_YESTERDAY = ENERGY_TODAY;
 
 		// обнулить суточные данные
-		ENERGY_00 = (int32_t) (energy * 100);
+		ENERGY_00 = _energy;
 		ENERGY_07 = ENERGY_00;
 		ENERGY_23 = ENERGY_00;
 		ENERGY_TODAY = 0;
@@ -547,23 +582,6 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 		rtc_data.current_max.dt = 0;
 
 	} 
-
-	int32_t _energy = (int32_t) (energy * 100);
-	if ( _energy < 1.0f ) _energy = rtc_data.energy_today;
-
-	ENERGY_TODAY = _energy - ENERGY_00;
-	if (  ENERGY_TODAY < 0 ) ENERGY_TODAY = 0;
-	
-	if ( time_loc.hour < 7)
-	{
-		ENERGY_07 = _energy; 
-	} 
-
-	if ( time_loc.hour < 23)
-	{
-		ENERGY_23 = _energy; 
-	}
-
 
 	if ( GPIO_ALL_GET( 6 ) == 1 )
 	{
@@ -582,10 +600,13 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 	rtc_data.energy_07_prev = ENERGY_07_Y;
 	rtc_data.energy_23_prev = ENERGY_23_Y;
 
-	uint32_t crc32 = calcCRC32( (uint8_t *)&rtc_data, sizeof(rtc_data_t));
-	rtc_data.crc32 = crc32;
-	// пишем в rtc обнуленные данные
-	system_rtc_mem_write(70, &rtc_data, sizeof(rtc_data_t));
+	rtc_data.voltage_min.value = volt_min.value;
+	rtc_data.voltage_min.dt = volt_min.dt;		
+	rtc_data.voltage_max.value = volt_max.value;
+	rtc_data.voltage_max.dt = volt_max.dt;		
+	rtc_data.current_max.value = curr_max.value;
+	rtc_data.current_max.dt = curr_max.dt;
+	saveToRTC();
 
 	if(timersrc%3600==0){
 		// выполнение кода каждый час
@@ -631,7 +652,7 @@ void ICACHE_FLASH_ATTR sdm_send (uint8_t addr, uint8_t fcode, uint32_t reg) {
 	os_delay_us(20);
 }
 
-float ICACHE_FLASH_ATTR sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
+float sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
 	uint8_t fcode = 4;
 	uint8_t i;
 	uint8_t data[RESPONSE_DATA_SIZE];
@@ -648,7 +669,7 @@ float ICACHE_FLASH_ATTR sdm_read(uint8_t addr, uint8_t *buffer, uint8_t cnt) {
 	return value;
 }
 
-uint16_t ICACHE_FLASH_ATTR sdm_crc(uint8_t *data, uint8_t sz) {
+uint16_t sdm_crc(uint8_t *data, uint8_t sz) {
 	uint16_t _crc, _flag;
 	_crc = 0xFFFF;
 	uint8_t i,j;
@@ -841,10 +862,11 @@ void webfunc(char *pbuf) {
 							"<td>Сила тока: <b>%d.%d</b> <small>А</small></td>"
 							"<td>Мощность: <b>%d</b> <small>Вт</small></td>"
 							"</tr>"
-						  "</table>", 
-						  (int)voltage, 		
-						  (uint16_t)current, 		(uint16_t)(current*100) % 100,
-						  (uint16_t)power
+						  "</table>"
+						  , (int)voltage
+						  , (uint16_t)current
+						  , (uint16_t)(current*100) % 100
+						  , (uint16_t)power
 				);
 	
 	os_sprintf(HTTPBUFF, 
@@ -862,16 +884,16 @@ void webfunc(char *pbuf) {
 				"<td align='right'>Время: <b>%02d:%02d</b></td>"
 			"</tr>"
 			"</table>"
-	, (int)rtc_data.voltage_min.value
-	, rtc_data.voltage_min.dt / 3600
-	, (rtc_data.voltage_min.dt % 3600) / 60
-	, (int)rtc_data.voltage_max.value
-	, rtc_data.voltage_max.dt / 3600
-	, (rtc_data.voltage_max.dt % 3600) / 60
-	, (uint16_t)rtc_data.current_max.value
-	, (uint16_t)(rtc_data.current_max.value*100) % 100
-	, rtc_data.current_max.dt / 3600
-	, (rtc_data.current_max.dt % 3600) / 60
+			, (int)rtc_data.voltage_min.value
+			, rtc_data.voltage_min.dt / 3600
+			, (rtc_data.voltage_min.dt % 3600) / 60
+			, (int)rtc_data.voltage_max.value
+			, rtc_data.voltage_max.dt / 3600
+			, (rtc_data.voltage_max.dt % 3600) / 60
+			, (uint16_t)rtc_data.current_max.value
+			, (uint16_t)(rtc_data.current_max.value*100) % 100
+			, rtc_data.current_max.dt / 3600
+			, (rtc_data.current_max.dt % 3600) / 60
 	);
 	
 	//=====================================
