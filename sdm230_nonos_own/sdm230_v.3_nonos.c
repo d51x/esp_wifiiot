@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.16.3"
+	#define FW_VER "3.16.4"
 	
 	/*
 	Глобальные переменные: 2
@@ -845,7 +845,7 @@ void webfunc(char *pbuf) {
 				"<td align='right'>Перегрузка: <span style='color: %s;'><b>%s</b></span></td>"
 			"</tr>"
 			"<tr>"
-				"<td align='left'>Отсечка по мощности: <b>%d.%03d</b> кВт</td>"
+				"<td align='left'>Отсечка по мощности: <b>%d.%d</b> кВт</td>"
 				"<td align='right'>GPIO2: <span style='color: %s;'><b>%s</b></span></td>"
 			"</tr>"
 		"</table>"
