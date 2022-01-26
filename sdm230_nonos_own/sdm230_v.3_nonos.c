@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.16.4"
+	#define FW_VER "3.17"
 	
 	/*
 	Глобальные переменные: 2
@@ -137,15 +137,6 @@
 	#define RESPONSE_SIZE sizeof(SDMCommand_response_t)
 	#define RESPONSE_DATA_SIZE 4
 
-	#define VOLTAGE_TOPIC_L		"l_pmv"
-	#define CURRENT_TOPIC_L		"l_pmc"
-	#define POWER_TOPIC_L			"l_pmw"
-	#define ENERGY_TOPIC_L		"l_pmwh"
-	#define ENERGY_TODAY_TOPIC_L		"l_pmwht"
-	#define ENERGY_YESTERDAY_TOPIC_L		"l_pmwhy"
-	#define OVERLOAD_TOPIC_L		"l_overload"
-
-	#define MQTT_SEND_INTERVAL 10 // sec
 	#define VOLTAGE_TOPIC		"pmv"
 	#define CURRENT_TOPIC		"pmc"
 	#define POWER_TOPIC			"pmw"
@@ -153,13 +144,7 @@
 	#define ENERGY_TODAY_TOPIC		"pmwht"
 	#define ENERGY_YESTERDAY_TOPIC		"pmwhy"
 	#define OVERLOAD_TOPIC		"overload"
-	#define MQTT_PAYLOAD_BUF 20
-	#define mqtt_send_interval_sec SENSCFG[1]
-
-	os_timer_t mqtt_send_timer;	
-	void mqtt_send_cb();
-
-
+	
 	#define sdm_task_delay SENSCFG[0]
 
 	uint32_t command = SDM_NO_COMMAND;
@@ -202,13 +187,13 @@
 	//uint32_t getEnergyYesterdayInt(){return (uint32_t)(energy_yesterday * 100);}
 	uint32_t getEnergyYesterdayInt(){return (uint32_t)(ENERGY_YESTERDAY);}
 	
-#define ADDLISTSENS {200, LSENSFL1 | LS_MODE_VOLT | LSENS32BIT | LSENSFUNS, "Voltage", VOLTAGE_TOPIC_L, getVoltageInt, NULL},\
-					{201, LSENSFL2 | LS_MODE_CURRENT | LSENS32BIT | LSENSFUNS, "Current", CURRENT_TOPIC_L, getCurrentInt, NULL},\
-					{202, LSENSFL2 | LS_MODE_WATT | LSENS32BIT | LSENSFUNS, "Power", POWER_TOPIC_L, getPowerInt, NULL},\
-					{203, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "Energy", ENERGY_TOPIC_L, getEnergyInt, NULL},\
-					{204, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "EnergyT", ENERGY_TODAY_TOPIC_L, getEnergyTodayInt, NULL},\
-					{205, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "EnergyY", ENERGY_YESTERDAY_TOPIC_L, getEnergyYesterdayInt, NULL},\
-					{206, LSENSFL0, "Overload", OVERLOAD_TOPIC_L, &overload, NULL},\
+#define ADDLISTSENS {200, LSENSFL1 | LS_MODE_VOLT | LSENS32BIT | LSENSFUNS, "Voltage", VOLTAGE_TOPIC, getVoltageInt, NULL},\
+					{201, LSENSFL2 | LS_MODE_CURRENT | LSENS32BIT | LSENSFUNS, "Current", CURRENT_TOPIC, getCurrentInt, NULL},\
+					{202, LSENSFL2 | LS_MODE_WATT | LSENS32BIT | LSENSFUNS, "Power", POWER_TOPIC, getPowerInt, NULL},\
+					{203, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "Energy", ENERGY_TOPIC, getEnergyInt, NULL},\
+					{204, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "EnergyT", ENERGY_TODAY_TOPIC, getEnergyTodayInt, NULL},\
+					{205, LSENSFL2 | LS_MODE_WATTH | LSENS32BIT | LSENSFUNS, "EnergyY", ENERGY_YESTERDAY_TOPIC, getEnergyYesterdayInt, NULL},\
+					{206, LSENSFL0, "Overload", OVERLOAD_TOPIC, &overload, NULL},\
 
 	void system_start_cb( );
 	void read_electro_cb();	
@@ -316,28 +301,6 @@ void read_buffer(){
 }
 
 
-void ICACHE_FLASH_ATTR mqttSend(const char *topic, int32_t val){
-    char payload[MQTT_PAYLOAD_BUF];
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload, "%d", val);
-	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
-}
-
-void ICACHE_FLASH_ATTR mqttSendFloat(const char *topic, float val, int divider){
-    char payload[MQTT_PAYLOAD_BUF];
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	if (divider==0){
-		os_sprintf(payload, "%d", (int)val);
-	} else if (divider==10) {
-		os_sprintf(payload, "%d.%d", (int)val, (int)(val*divider) % divider);
-	} else if (divider==100) {
-		os_sprintf(payload, "%d.%02d", (int)val, (int)(val*divider) % divider);
-	} else if (divider==1000) {
-		os_sprintf(payload, "%d.%03d", (int)val, (int)(val*divider) % divider);
-	}
-	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
-}
-
 void ICACHE_FLASH_ATTR get_config() {
 
 	//-----------------------------------------------------------
@@ -347,11 +310,7 @@ void ICACHE_FLASH_ATTR get_config() {
 		sdm_task_delay = SDM_PAUSE_TASK_MS;
 		needSave = 1;
 	}
-	
-	if (mqtt_send_interval_sec < 2) {
-		mqtt_send_interval_sec = sensors_param.mqttts;
-		needSave = 1;
-	}
+
 	//----------------------------------------------------------
 	
 	uint16_t prev_treshhold = current_overload_treshold;
@@ -364,10 +323,9 @@ void ICACHE_FLASH_ATTR get_config() {
 		// поменялось значение в настройках, надо обновить valdes[0]
 		prev_treshhold = current_overload_treshold;
 		valdes[0] = current_overload_treshold;
-		//mqttSend("valdes1", valdes[0]);
 	} else {
 		// значение не менялось, но могло поменяться в valdes[0]
-		uint16_t tmp_treshold = valdes[0];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
+		uint16_t tmp_treshold = valdes[0];  
 		if ( tmp_treshold > 0 && tmp_treshold != current_overload_treshold ) {  
 			// значение в valdes[0] отличается от текущего и в опциях
 			current_overload_treshold = tmp_treshold;
@@ -387,10 +345,9 @@ void ICACHE_FLASH_ATTR get_config() {
 		// поменялось значение в настройках, надо обновить valdes[1]
 		prev_treshhold = power_overload_treshold;
 		valdes[1] = power_overload_treshold;
-		//mqttSend("valdes2", valdes[1]);
 	} else {
 		// значение не менялось, но могло поменяться в valdes[1]
-		uint16_t tmp_treshold = valdes[1];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
+		uint16_t tmp_treshold = valdes[1];
 		if ( tmp_treshold > 0 && tmp_treshold != power_overload_treshold ) {  
 			// значение в valdes[1] отличается от текущего и в опциях
 			power_overload_treshold = tmp_treshold;
@@ -540,7 +497,6 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) {
 			0:00:00-59 или
 			0:07:00-59 или
 			0:23:00-59 
-			отправляем по mqtt
 			ребутим
 		*/
 	}
@@ -628,12 +584,6 @@ void ICACHE_FLASH_ATTR system_start_cb( ){
 	os_timer_disarm(&overload_detect_timer);
 	os_timer_setfn(&overload_detect_timer, (os_timer_func_t *)overload_detect_cb, NULL);
 	os_timer_arm(&overload_detect_timer, overload_detect_delay, 1);
-
-
-	//mqtt_client = (MQTT_Client*) &mqttClient;
-	os_timer_disarm(&mqtt_send_timer);
-	os_timer_setfn(&mqtt_send_timer, (os_timer_func_t *)mqtt_send_cb, NULL);
-	os_timer_arm(&mqtt_send_timer, mqtt_send_interval_sec * 1000, 1);
 
 	command = SDM_NO_COMMAND;
 }
@@ -782,19 +732,6 @@ void ICACHE_FLASH_ATTR read_electro_cb()
 	os_timer_setfn(&read_electro_timer, (os_timer_func_t *)read_electro_cb, NULL);
 	os_timer_arm(&read_electro_timer, sdm_task_delay, 0);		
 }
-
-
-void ICACHE_FLASH_ATTR mqtt_send_cb() {
-	mqttSendFloat(VOLTAGE_TOPIC, voltage, 10);
-	mqttSendFloat(CURRENT_TOPIC, current, 10);
-	mqttSendFloat(POWER_TOPIC, power, 0);
-	mqttSendFloat(ENERGY_TOPIC, energy, 100);
-	mqttSend(OVERLOAD_TOPIC, overload);	
-	
-	mqttSendFloat(ENERGY_TODAY_TOPIC, (float)ENERGY_TODAY / 100.0f, 100);	
-	mqttSendFloat(ENERGY_YESTERDAY_TOPIC, (float)ENERGY_YESTERDAY / 100.0f, 100);	
-}	
-
 
 void ICACHE_FLASH_ATTR overload_detect_cb()
 {
