@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.16.2"
+	#define FW_VER "3.16.3"
 	
 	/*
 	Глобальные переменные: 2
@@ -328,8 +328,12 @@ void ICACHE_FLASH_ATTR mqttSendFloat(const char *topic, float val, int divider){
 	memset(payload, 0, MQTT_PAYLOAD_BUF);
 	if (divider==0){
 		os_sprintf(payload, "%d", (int)val);
-	} else {
+	} else if (divider==10) {
 		os_sprintf(payload, "%d.%d", (int)val, (int)(val*divider) % divider);
+	} else if (divider==100) {
+		os_sprintf(payload, "%d.%02d", (int)val, (int)(val*divider) % divider);
+	} else if (divider==1000) {
+		os_sprintf(payload, "%d.%03d", (int)val, (int)(val*divider) % divider);
 	}
 	MQTT_Publish(&mqttClient, topic, payload, os_strlen(payload), 2, 0, 0);
 }
@@ -841,7 +845,7 @@ void webfunc(char *pbuf) {
 				"<td align='right'>Перегрузка: <span style='color: %s;'><b>%s</b></span></td>"
 			"</tr>"
 			"<tr>"
-				"<td align='left'>Отсечка по мощности: <b>%d.%d</b> кВт</td>"
+				"<td align='left'>Отсечка по мощности: <b>%d.%03d</b> кВт</td>"
 				"<td align='right'>GPIO2: <span style='color: %s;'><b>%s</b></span></td>"
 			"</tr>"
 		"</table>"
@@ -859,7 +863,7 @@ void webfunc(char *pbuf) {
 	os_sprintf(HTTPBUFF, "<table width='100%%' cellpadding='2' cellspacing='2' cols='3'>"
 							"<tr>"
 							"<td>Напряжение: <b>%d</b> <small>В</small></td>"
-							"<td>Сила тока: <b>%d.%d</b> <small>А</small></td>"
+							"<td>Сила тока: <b>%d.%02d</b> <small>А</small></td>"
 							"<td>Мощность: <b>%d</b> <small>Вт</small></td>"
 							"</tr>"
 						  "</table>"
@@ -903,24 +907,24 @@ void webfunc(char *pbuf) {
 
 	os_sprintf(HTTPBUFF, "<div>");
 	os_sprintf(HTTPBUFF, "<div><b>Расход</b></div>");
-	os_sprintf(HTTPBUFF, "<div><b class='tn'>Всего:</b> %d.%d кВт*ч</div>"
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>Всего:</b> %d.%02d кВт*ч</div>"
 						, (uint32_t)energy
 						, (uint32_t)(energy*100) % 100
 	);
 
-	os_sprintf(HTTPBUFF, "<div><b class='tn'>вчера:</b> %d.%d кВт*ч</div>"
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>вчера:</b> %d.%02d кВт*ч</div>"
 						, (int32_t)(ENERGY_YESTERDAY / 100)
 						, (int32_t)(ENERGY_YESTERDAY % 100)
 	);
-	os_sprintf(HTTPBUFF, "<div><b class='tn'>сегодня:</b> %d.%d кВт*ч</div>"
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>сегодня:</b> %d.%02d кВт*ч</div>"
 						, (int32_t)(ENERGY_TODAY / 100)
 						, (int32_t)(ENERGY_TODAY % 100)
 	);
-	os_sprintf(HTTPBUFF, "<div><b class='tn'>день:</b> %d.%d кВт*ч</div>"
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>день:</b> %d.%02d кВт*ч</div>"
 					   , (int32_t)( (ENERGY_23 - ENERGY_07) / 100)
 					   , (int32_t)( (ENERGY_23 - ENERGY_07) % 100)
 	);
-	os_sprintf(HTTPBUFF, "<div><b class='tn'>ночь:</b> %d.%d кВт*ч</div>"
+	os_sprintf(HTTPBUFF, "<div><b class='tn'>ночь:</b> %d.%02d кВт*ч</div>"
 					   , (int32_t)( (ENERGY_07 - ENERGY_23_Y) / 100)
 					   , (int32_t)( (ENERGY_07 - ENERGY_23_Y) % 100)
 	);
