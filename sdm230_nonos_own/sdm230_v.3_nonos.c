@@ -2,7 +2,7 @@
 	#include "../moduls/uart.h"
 	#include "../moduls/uart.c"
 
-	#define FW_VER "3.17"
+	#define FW_VER "3.18.1"
 	
 	/*
 	Глобальные переменные: 2
@@ -167,8 +167,6 @@
 	os_timer_t read_electro_timer;
 	os_timer_t system_start_timer;
 	os_timer_t overload_detect_timer;
-	os_timer_t overload_reset_timer;
-
 
 	uint8_t overload = 0;										// флаг наличия перегрузки
 	#define current_overload_treshold SENSCFG[2]					// valdes[0]
@@ -198,7 +196,6 @@
 	void system_start_cb( );
 	void read_electro_cb();	
 	void overload_detect_cb();	
-	void overload_reset_cb();	
 
 	// uart0
 	void send_buffer(uint8_t *buffer, uint8_t len);
@@ -735,8 +732,9 @@ void ICACHE_FLASH_ATTR read_electro_cb()
 
 void ICACHE_FLASH_ATTR overload_detect_cb()
 {
-	//  отрабатывает каждые 50 мсек
-		
+	static uint32_t overload_dt = 0;
+	//  отрабатывает каждые 50 мсек	
+	overload = 0;
 	// превышение по току, если в настройках отсечка по току более 10А
 	if ( current_overload_treshold > 100 && 
 	     current >= ((float)current_overload_treshold / 10.0f)) 
@@ -746,28 +744,22 @@ void ICACHE_FLASH_ATTR overload_detect_cb()
 		
 	// или превышение по мощности, если в настройках отсечка по мощности более 1000 Вт
 	if ( power_overload_treshold > 1000 && 
-	     power >= power_overload_treshold) 
+	     power >= (float)power_overload_treshold) 
 	{
-		overload = 2;
+		overload = (overload == 1) ? 3 : 2;
 	}
 
 	if ( overload > 0) {
 		// есть перегрузка
+		overload_dt = millis();
 		GPIO_ALL( RESET_LOAD_GPIO, GPIO_ON);
-		// запустим единичный overload_reset_timer, который обнулит флаг перегрузки и выставит gpio2 в 0
-		os_timer_disarm(&overload_reset_timer);
-		os_timer_setfn(&overload_reset_timer, (os_timer_func_t *)overload_reset_cb, NULL);
-		os_timer_arm(&overload_reset_timer, overload_time * 1000, 0);
+	} else {
+		if (overload_time*1000 < (millis() - overload_dt)) {
+			GPIO_ALL( RESET_LOAD_GPIO, GPIO_OFF);	
+		} 
 	}
-	// overload_reset_timer сбросит флаг перегрузки через Х сек после сработки перегрузки
-	// если перегрузка не прекратилась, таймер перезапускается, т.е. в итоге флаг сбросится таймером только после Х сек после последнего детекта перегрузки
 }
 
-void overload_reset_cb()
-{
-	overload = 0;
-	GPIO_ALL( RESET_LOAD_GPIO, GPIO_OFF);
-}
 
 void webfunc(char *pbuf) {
 
