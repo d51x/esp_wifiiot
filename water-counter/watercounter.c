@@ -1,5 +1,7 @@
 /*
-3.1 - изменение wash_end_ts по mqtt
+3.2 - в конфиге поменял WASH_START_TS на WASH_END_TS
+	  mqtt save (eeprom)
+3.1 - изменение WASH_END_TS по mqtt
 3.0 - новые адреса в eeprom + уменьшение циклов записи 
       отключены авто определение начала и завершения промывки
 2.66 - прием wash_state по mqtt
@@ -13,7 +15,7 @@
 // Количество настроек: Счетчик1 GPIO,Расход1 общий,Расход1 сегодня,Расход1 вчера,Счетчик2 GPIO,Расход2 общий,Расход2 сегодня,Расход2 вчера,Последняя промывка,Счетчик1-промывка,Счетчик2-промывка-до,Счетчик2-промывка-после,Объем до промывки,Дней до промывки,Автоотключение промывки (мин),Сбросить все, EEPROM Offset
 
 */
-#define FW_VER "3.1"
+#define FW_VER "3.2.7"
 
 os_timer_t gpio_timer;
 
@@ -77,6 +79,7 @@ static uint32_t btn2_pressed = 0;
 #define TOPIC_WATER_COUNTER_1_Y 	"watercnt1y"
 #define TOPIC_WATER_COUNTER_1_T 	"watercnt1t"
 #define TOPIC_WATER_COUNTER_2 	"watercnt2"
+#define TOPIC_EEPROM_SAVE 	"save"
 
 #define TOPIC_WATER_COUNTER_1_WASH_AFTER 	"watercnt1after"
 #define TOPIC_WATER_COUNTER_1_WASH_BEFORE 	"watercnt1before"
@@ -88,27 +91,28 @@ static uint32_t btn2_pressed = 0;
 #define TOPIC_WATER_COUNTER_2_WASH_BEFORE 	"watercnt2before"
 
 #define EEPROM_ADDR							0x50
+#define EEPROM_START_OFFSET					80
 
-#define EEPROM_MAGIC_ADDR					16 	
-#define EEPROM_WATERCNT1_ADDR				20	
-#define EEPROM_WATERCNT1_Y_ADDR				24	
-#define EEPROM_WATERCNT1_T_ADDR				28	
-#define EEPROM_WATERCNT2_ADDR				32	
-#define EEPROM_WATERCNT2_Y_ADDR				36	
-#define EEPROM_WATERCNT2_T_ADDR				40	
-#define EEPROM_WASH_START_DT_ADDR			44			// дата и время начала промывки
-#define EEPROM_WASH_END_DT_ADDR				48			// дата и время завершения промывки
-#define EEPROM_WATERCNT2_CHANGE_TS_ADDR		52			// дата и время изменения показаний счетчика 2
-#define EEPROM_WATERCNT1_WASH_START_ADDR	56			// показания счетчика 1 при начале промывки
-#define EEPROM_WATERCNT2_WASH_START_ADDR	60			// показания счетчика 2 при начале промывки
-#define EEPROM_WATERCNT2_WASH_END_ADDR		64			// показания счетчика 2 при завершении промывки
-#define EEPROM_WATERCNT2_WASH_SWITCH_ADDR	68			// показания счетчика 2 при переключении на промывку умягчителя
-#define EEPROM_WASH_COUNT_ADDR				72			// кол-во совершенных промывок
-#define EEPROM_WASH_DURATION_ADDR			76			// длительность последней промывки
-#define EEPROM_WASH_STATE_ADDR				80			// текущее состояние
-#define EEPROM_WASH_TYPE_ADDR				84			// тип промывки
-#define EEPROM_CLEAN_WATER_ADDR				88			// расход чистой воды после промывки
-#define EEPROM_WASH_VOLUME_ADDR				92			// уставка объема воды до промывки
+#define EEPROM_MAGIC_ADDR					16 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT1_ADDR				20 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT1_Y_ADDR				24 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT1_T_ADDR				28 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT2_ADDR				32 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT2_Y_ADDR				36 + EEPROM_START_OFFSET	
+#define EEPROM_WATERCNT2_T_ADDR				40 + EEPROM_START_OFFSET	
+#define EEPROM_WASH_START_DT_ADDR			44 + EEPROM_START_OFFSET			// дата и время начала промывки
+#define EEPROM_WASH_END_DT_ADDR				48 + EEPROM_START_OFFSET			// дата и время завершения промывки
+#define EEPROM_WATERCNT2_CHANGE_TS_ADDR		52 + EEPROM_START_OFFSET			// дата и время изменения показаний счетчика 2
+#define EEPROM_WATERCNT1_WASH_START_ADDR	56 + EEPROM_START_OFFSET			// показания счетчика 1 при начале промывки
+#define EEPROM_WATERCNT2_WASH_START_ADDR	60 + EEPROM_START_OFFSET			// показания счетчика 2 при начале промывки
+#define EEPROM_WATERCNT2_WASH_END_ADDR		64 + EEPROM_START_OFFSET			// показания счетчика 2 при завершении промывки
+#define EEPROM_WATERCNT2_WASH_SWITCH_ADDR	68 + EEPROM_START_OFFSET			// показания счетчика 2 при переключении на промывку умягчителя
+#define EEPROM_WASH_COUNT_ADDR				72 + EEPROM_START_OFFSET			// кол-во совершенных промывок
+#define EEPROM_WASH_DURATION_ADDR			76 + EEPROM_START_OFFSET			// длительность последней промывки
+#define EEPROM_WASH_STATE_ADDR				80 + EEPROM_START_OFFSET			// текущее состояние
+#define EEPROM_WASH_TYPE_ADDR				84 + EEPROM_START_OFFSET			// тип промывки
+#define EEPROM_CLEAN_WATER_ADDR				88 + EEPROM_START_OFFSET			// расход чистой воды после промывки
+#define EEPROM_WASH_VOLUME_ADDR				92 + EEPROM_START_OFFSET			// уставка объема воды до промывки
 
 #define  WATERCNT1_GPIO 		sensors_param.cfgdes[0]		// счетчик 1 gpio
 #define  WATERCNT1 				sensors_param.cfgdes[1]		// счетчик 1 общий расход
@@ -122,8 +126,8 @@ uint32_t watercnt1_change_ts = TIMESTAMP_DEFAULT;		// счетчик 1 тайм�
 #define  WATERCNT2_Y 			sensors_param.cfgdes[7]		// счетчик 2 расход вчера
 uint32_t watercnt2_change_ts = TIMESTAMP_DEFAULT;		// счетчик 2 таймстамп последнего изменения показаний
 
-#define  WASH_START_TS 			sensors_param.cfgdes[8]		// таймстамп начала промывки
-uint32_t wash_end_ts = TIMESTAMP_DEFAULT;				// таймстамп окончания промывки
+uint32_t  wash_start_ts = TIMESTAMP_DEFAULT; 			// таймстамп начала промывки
+#define WASH_END_TS 			sensors_param.cfgdes[8]			// таймстамп окончания промывки
 
 #define  WASH_CNT1_START 		sensors_param.cfgdes[9]		// показания счетчика 1 на начало промывки
 uint32_t wash_cnt1_end = 0;								// показания счетчика 1 на окончание промывки
@@ -139,7 +143,7 @@ uint32_t wash_cnt2_switch = 0;							// показания счетчика 2 п
 #define  WASH_AUTO_END 			sensors_param.cfgdes[14]	//30  	// автовыключение промывки
 #define  RESET_ALL 				sensors_param.cfgdes[15]	//флаг сброса
 #define  EEPROM_OFFSET          sensors_param.cfgdes[16]	//начальный адрес настроек в eeprom
-uint16_t eeprom_start_options = EEPROM_MAGIC_ADDR;
+uint32_t eeprom_start_options = EEPROM_MAGIC_ADDR;
 
 uint32_t clean_water;		// объем чистой воды после последней промывки (литры)
 uint16_t percent;
@@ -156,7 +160,7 @@ uint8_t reset = 0;
 
 uint8_t configChanged = 0;
 
-#define PASSED_DAY_AFTER_WASH() ( (GET_TS()  - wash_end_ts ) / (3600*24) )
+#define PASSED_DAY_AFTER_WASH() ( (GET_TS()  - WASH_END_TS ) / (3600*24) )
 
 #define		RTC_MAGIC		0x55aaaa55
 
@@ -170,7 +174,7 @@ uint8_t configChanged = 0;
 // 					{207,LSENSFL0|LSENS32BIT,"WashTime","washtime",&wash_duration,NULL}, \
 // 					{208,LSENSFL0|LSENS32BIT,"WashCnt","washcnt",&wash_count,NULL}, \
 // 					{209,LSENSFL0|LSENS32BIT,"WashStart","washstart",&wash_start_dt,NULL}, \
-// 					{210,LSENSFL0|LSENS32BIT,"WashEnd","washend",&WASH_START_TS,NULL}, \
+// 					{210,LSENSFL0|LSENS32BIT,"WashEnd","washend",&wash_start_ts,NULL}, \
 // 					{211,LSENSFL0,"WashResrc","washrsrc",&percent,NULL}, 
 
 
@@ -183,8 +187,8 @@ uint8_t configChanged = 0;
 					{206,LSENSFL0|LSENS32BIT,"WashState","washstate",&wash_state,NULL}, \
 					{207,LSENSFL0|LSENS32BIT,"WashTime","washtime",&wash_duration,NULL}, \
 					{208,LSENSFL0|LSENS32BIT,"WashCnt","washcnt",&wash_count,NULL}, \
-					{209,LSENSFL0|LSENS32BIT,"WashStart",TOPIC_WASH_START,&WASH_START_TS,NULL}, \
-					{210,LSENSFL0|LSENS32BIT,"WashEnd",TOPIC_WASH_END,&wash_end_ts,NULL}, \
+					{209,LSENSFL0|LSENS32BIT,"WashStart",TOPIC_WASH_START,&wash_start_ts,NULL}, \
+					{210,LSENSFL0|LSENS32BIT,"WashEnd",TOPIC_WASH_END,&WASH_END_TS,NULL}, \
 					{211,LSENSFL0,"WashResrc","washrsrc",&percent,NULL}, \
 					{212,LSENSFL3|LSENS32BIT,"CleanWater","watercln",&clean_water,NULL}, \
 					{213,LSENSFL0|LSENS32BIT,"CleanVolume",TOPIC_WATER_CLEAN_VOLUME,&CLEAN_WATER_VOLUME,NULL}, \
@@ -235,7 +239,7 @@ void ICACHE_FLASH_ATTR mqtt_send_wash_start()
 	os_sprintf(payload,"%d", wash_state);
 	MQTT_Publish(&mqttClient, TOPIC_WASH_STATE, payload, os_strlen(payload), 0, 0, 0);
 	
-	os_sprintf(payload,"%d", WASH_START_TS);
+	os_sprintf(payload,"%d", wash_start_ts);
 	MQTT_Publish(&mqttClient, TOPIC_WASH_START, payload, os_strlen(payload), 0, 0, 0);
 		
 	#endif	
@@ -250,7 +254,7 @@ void ICACHE_FLASH_ATTR mqtt_send_wash_end()
 	os_sprintf(payload,"%d", (WASH_CNT2_END > WASH_CNT2_START /*&& wash_cnt2_switch >= WASH_CNT2_START*/) ? (WASH_CNT2_END - WASH_CNT2_START) : 0);
 	MQTT_Publish(&mqttClient, TOPIC_WASH_LITRES, payload, os_strlen(payload), 0, 0, 0);
 			
-	os_sprintf(payload,"%d", WASH_START_TS);
+	os_sprintf(payload,"%d", wash_start_ts);
 	MQTT_Publish(&mqttClient, TOPIC_WASH_END, payload, os_strlen(payload), 0, 0, 0);
 	
 	os_sprintf(payload,"%d", wash_state);
@@ -262,7 +266,8 @@ void ICACHE_FLASH_ATTR mqtt_send_wash_end()
 uint32_t ICACHE_FLASH_ATTR read_eeprom(uint16_t addr)
 {
 	uint32_t val;
-    read_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
+    read_24cxx(EEPROM_ADDR, addr, (uint8_t*)&val, 4);
+    //read_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
 	if ( val == 0xFFFFFFFF ) val = 0;
 	return val;
 }
@@ -272,7 +277,8 @@ void ICACHE_FLASH_ATTR write_eeprom(uint16_t addr, uint32_t val)
 	uint32_t v = read_eeprom(addr);
 	if ( v != val)	
 	{
-		write_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
+		//write_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
+		write_24cxx(EEPROM_ADDR, addr, (uint8_t*)&val, 4);
 		os_delay_us(10);
 	}
 }
@@ -280,6 +286,8 @@ void ICACHE_FLASH_ATTR write_eeprom(uint16_t addr, uint32_t val)
 
 void ICACHE_FLASH_ATTR save_eeprom()
 {
+	write_eeprom(EEPROM_MAGIC_ADDR, RTC_MAGIC);
+	
 	write_eeprom(EEPROM_WASH_STATE_ADDR, 		wash_state);
 	write_eeprom(EEPROM_WASH_TYPE_ADDR,			wash_type);
 	
@@ -291,8 +299,8 @@ void ICACHE_FLASH_ATTR save_eeprom()
 	write_eeprom(EEPROM_WATERCNT2_Y_ADDR, 		WATERCNT2_Y);
 	write_eeprom(EEPROM_WATERCNT2_T_ADDR, 		WATERCNT2_T);
 	
-	write_eeprom(EEPROM_WASH_START_DT_ADDR, 	WASH_START_TS);
-	write_eeprom(EEPROM_WASH_END_DT_ADDR, 		wash_end_ts);
+	write_eeprom(EEPROM_WASH_START_DT_ADDR, 	wash_start_ts);
+	write_eeprom(EEPROM_WASH_END_DT_ADDR, 		WASH_END_TS);
 
 	write_eeprom(EEPROM_WATERCNT2_CHANGE_TS_ADDR, watercnt2_change_ts);
 
@@ -322,7 +330,7 @@ void ICACHE_FLASH_ATTR do_wash_start(uint16_t counter_offset)
 	wash_state = STATE_WASH;
 	wash_type = WASH_FERRUM_FREE;
 
-	WASH_START_TS = GET_TS();
+	wash_start_ts = GET_TS();
 
 	wash_cnt2_switch = WASH_CNT2_START;
 	WASH_CNT1_START = WATERCNT1;		// фиксируем показания счетчика 1 на начало промывки
@@ -344,8 +352,8 @@ void ICACHE_FLASH_ATTR do_wash_end(uint16_t counter_offset)
 	wash_state = STATE_NORMA;
 	wash_type = WASH_FERRUM_FREE;
 	
-	WASH_START_TS = TIMESTAMP_DEFAULT;
-	wash_end_ts = GET_TS();			// фиксируем дату и время завершения промывки
+	wash_start_ts = TIMESTAMP_DEFAULT;
+	WASH_END_TS = GET_TS();			// фиксируем дату и время завершения промывки
 	
 	//WASH_CNT2_START = WATERCNT2;
 	WASH_CNT2_END = WATERCNT2;		// фиксируем показания счетчика 2 на окончание промывки
@@ -597,8 +605,8 @@ void ICACHE_FLASH_ATTR reset_all()
 	wash_count = 0;
 	wash_duration = 0;
 
-	WASH_START_TS = TIMESTAMP_DEFAULT;
-	wash_end_ts = TIMESTAMP_DEFAULT;
+	wash_start_ts = TIMESTAMP_DEFAULT;
+	WASH_END_TS = TIMESTAMP_DEFAULT;
 
 	WASH_CNT1_START = WATERCNT1;
 	WASH_CNT2_START = WATERCNT2;
@@ -637,9 +645,9 @@ void ICACHE_FLASH_ATTR mqtt_receive(char *topicBuf, char *dataBuf) {
 		} else if (!strcoll(topic, TOPIC_RESET)) {
             configChanged = configChanged | process_message(dataBuf, &RESET_ALL);		
 		} else if (!strcoll(topic, TOPIC_WASH_START)) {
-            configChanged = configChanged | process_message(dataBuf, &WASH_START_TS);			
+            configChanged = configChanged | process_message(dataBuf, &wash_start_ts);			
 		} else if (!strcoll(topic, TOPIC_WASH_END)) {
-            configChanged = configChanged | process_message(dataBuf, &wash_end_ts);		
+            configChanged = configChanged | process_message(dataBuf, &WASH_END_TS);		
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1)) {
             configChanged = configChanged | process_message(dataBuf, &WATERCNT1);			
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1_Y)) {
@@ -658,6 +666,11 @@ void ICACHE_FLASH_ATTR mqtt_receive(char *topicBuf, char *dataBuf) {
                 do_wash_end(0);
             } else {
                 do_wash_start(0);
+            }
+		} else if (!strcoll(topic, TOPIC_EEPROM_SAVE)) {
+			int32_t m = atoi(dataBuf);
+            if ( m  == 1) {
+                save_eeprom();
             }
 		}
 	}
@@ -688,9 +701,9 @@ void ICACHE_FLASH_ATTR startfunc()
 		WATERCNT2_Y = read_eeprom(EEPROM_WATERCNT2_Y_ADDR);
 		WATERCNT2_T = read_eeprom(EEPROM_WATERCNT2_T_ADDR);
 		
-		WASH_START_TS = read_eeprom(EEPROM_WASH_START_DT_ADDR);
-		wash_end_ts = read_eeprom(EEPROM_WASH_END_DT_ADDR);
-		if (wash_end_ts == 0) wash_end_ts = WASH_START_TS;
+		wash_start_ts = read_eeprom(EEPROM_WASH_START_DT_ADDR);
+		WASH_END_TS = read_eeprom(EEPROM_WASH_END_DT_ADDR);
+		if (WASH_END_TS == 0) WASH_END_TS = wash_start_ts;
 		
 		watercnt2_change_ts = read_eeprom(EEPROM_WATERCNT2_CHANGE_TS_ADDR);
 		
@@ -710,8 +723,6 @@ void ICACHE_FLASH_ATTR startfunc()
 	} 
 	else 
 	{
-		uint32_t mg = RTC_MAGIC;
-	
 		write_eeprom(EEPROM_MAGIC_ADDR, RTC_MAGIC);		
 
 		// eeprom пустой (нет наших данных), инициализируем нулями
@@ -723,8 +734,8 @@ void ICACHE_FLASH_ATTR startfunc()
 		WATERCNT2_Y = 0;
 		WATERCNT2_T = 0;
 		
-		WASH_START_TS = GET_TS();
-		wash_end_ts = GET_TS();
+		wash_start_ts = GET_TS();
+		WASH_END_TS = GET_TS();
 
 		watercnt2_change_ts = GET_TS();
 		
@@ -759,6 +770,8 @@ void ICACHE_FLASH_ATTR startfunc()
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) 
 {
+	eeprom_start_options = EEPROM_OFFSET;
+	
     if (timersrc < 15) return;
     if (timersrc == 15) started = 1;
 
@@ -792,7 +805,7 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 	// if ( 
 	// 	wash_state == STATE_NORMA 	// режима Норма, промывка не включена
 	// 	&& WATERCNT2 - WASH_CNT2_END > AUTO_WASH_START_DELTA // показания счетчика увеличились на 30 литров
-	// 	&& WASH_START_TS <= TIMESTAMP_DEFAULT
+	// 	&& wash_start_ts <= TIMESTAMP_DEFAULT
 	//    )
 	// {
 	// 	// автоматическое определение начала промывки
@@ -805,8 +818,8 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 	// if ( 	
 	// 	wash_state == STATE_WASH 
 	// 	&& ts > TIMESTAMP_DEFAULT  
-	// 	&& WASH_START_TS > TIMESTAMP_DEFAULT
-	// 	&& WASH_START_TS > wash_end_ts						 // время начала больше времени предыдущего окончания
+	// 	&& wash_start_ts > TIMESTAMP_DEFAULT
+	// 	&& wash_start_ts > WASH_END_TS						 // время начала больше времени предыдущего окончания
 	//     && (
 	// 		  (ts - watercnt2_change_ts) / 60  >= WASH_AUTO_END // время последнего изменения показаний счетчика 2 и если показания не изменялись более 30 мин, значит промывка завершилась
 	//           || WATERCNT1 - WASH_CNT1_START >= 20				 // показания счетчика 1 изменились на 20 литров (а при промывке у нас счетчик 1 не должен изменять показания)
@@ -824,7 +837,13 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
         //save_eeprom();
         configChanged = 0;
     } 
-    else if (timersrc%1800==0)  //30*60 сек  каждые 30 мин сохраняем данные во флеш и если не было изменений по mqtt
+	
+	if (timersrc%60==0)
+	{
+		save_eeprom();
+	}
+    
+	if (timersrc%1800==0)  //30*60 сек  каждые 30 мин сохраняем данные во флеш и если не было изменений по mqtt
 	{
 		//SAVEOPT;
 		save_options();
@@ -953,10 +972,10 @@ void webfunc(char *pbuf) {
 
 	os_sprintf(HTTPBUFF,"<br> <b>Ресурс:</b> <b><span style='color:%s'>%d %%</span></b>", color, percent );
 
-	if ( wash_end_ts == TIMESTAMP_DEFAULT)	
+	if ( WASH_END_TS == TIMESTAMP_DEFAULT)	
 		os_sprintf(HTTPBUFF,"<br><br> Промывка <b>--- дн. назад</b>"); 
 	else
-		os_sprintf(HTTPBUFF,"<br><br> Промывка <b>%d дн. назад</b> (%s)", ( GET_TS() > TIMESTAMP_DEFAULT ) ? PASSED_DAY_AFTER_WASH() : 0, sntp_get_real_time(wash_end_ts)); 
+		os_sprintf(HTTPBUFF,"<br><br> Промывка <b>%d дн. назад</b> (%s)", ( GET_TS() > TIMESTAMP_DEFAULT ) ? PASSED_DAY_AFTER_WASH() : 0, sntp_get_real_time(WASH_END_TS)); 
 	
 	// os_sprintf(HTTPBUFF,"<br> Счетчик1 на начало: %d", WASH_CNT1_START);
 	// os_sprintf(HTTPBUFF,"<br> Счетчик2 на начало: %d", WASH_CNT2_START);
@@ -971,8 +990,8 @@ void webfunc(char *pbuf) {
 
  	//os_sprintf(HTTPBUFF,"<br> wash_state: %d", wash_state); 
  	//os_sprintf(HTTPBUFF,"<br> wash_type: %d", wash_type); 
- 	// os_sprintf(HTTPBUFF,"<br> WASH_START_TS: %d", WASH_START_TS);
-	// os_sprintf(HTTPBUFF,"<br> wash_end_ts: %d", wash_end_ts);
+ 	// os_sprintf(HTTPBUFF,"<br> wash_start_ts: %d", wash_start_ts);
+	// os_sprintf(HTTPBUFF,"<br> WASH_END_TS: %d", WASH_END_TS);
 	// os_sprintf(HTTPBUFF,"<br> TIMESTAMP_DEFAULT: %d", TIMESTAMP_DEFAULT);
  	// os_sprintf(HTTPBUFF,"<br> watercnt2_change_ts: %d", watercnt2_change_ts); 
  	// os_sprintf(HTTPBUFF,"<br> XXX / TS: %d", GET_TS()); 
