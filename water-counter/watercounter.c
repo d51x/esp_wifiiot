@@ -1,4 +1,7 @@
 /*
+3.1 - изменение wash_end_ts по mqtt
+3.0 - новые адреса в eeprom + уменьшение циклов записи 
+      отключены авто определение начала и завершения промывки
 2.66 - прием wash_state по mqtt
 2.65 - передача Clean_water в mqtt
 	   передача CleanVolume в mqtt и прием
@@ -7,10 +10,10 @@
 
 версия 2.хх - добавляю работу с eeprom (24c64), убрал rtc mem
 
-// Количество настроек: Счетчик1 GPIO,Расход1 общий,Расход1 сегодня,Расход1 вчера,Счетчик2 GPIO,Расход2 общий,Расход2 сегодня,Расход2 вчера,Последняя промывка,Счетчик1-промывка,Счетчик2-промывка-до,Счетчик2-промывка-после,Объем до промывки,Дней до промывки,Автоотключение промывки (мин),Сбросить все
+// Количество настроек: Счетчик1 GPIO,Расход1 общий,Расход1 сегодня,Расход1 вчера,Счетчик2 GPIO,Расход2 общий,Расход2 сегодня,Расход2 вчера,Последняя промывка,Счетчик1-промывка,Счетчик2-промывка-до,Счетчик2-промывка-после,Объем до промывки,Дней до промывки,Автоотключение промывки (мин),Сбросить все, EEPROM Offset
 
 */
-#define FW_VER "2.66.2"
+#define FW_VER "3.1"
 
 os_timer_t gpio_timer;
 
@@ -26,7 +29,7 @@ os_timer_t gpio_timer;
 
 #define GET_TS()( sntp_get_current_timestamp() < TIMESTAMP_DEFAULT ? 0 : (sntp_get_current_timestamp() - sntp_get_timezone()*3600 + sensors_param.utc * 3600))
 
-#define TIMESTAMP_DEFAULT 1614081600
+#define TIMESTAMP_DEFAULT 1675962105
 #define MAX_COUNTER_VALUE 9999999
 
 #define GPIO_STATE_CLOSE 0
@@ -132,16 +135,16 @@ uint32_t wash_cnt2_switch = 0;							// показания счетчика 2 п
 
 #define  CLEAN_WATER_VOLUME 	sensors_param.cfgdes[12]	//10000 	// 10 кубов, объем чистой воды до следующей промывки		// можно выставлять через интерпретер
 
-#define  DAYS_BEFORE_WASHING 	sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
+#define  DAYS_BEFORE_WASHING 		sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
 #define  WASH_AUTO_END 			sensors_param.cfgdes[14]	//30  	// автовыключение промывки
 #define  RESET_ALL 				sensors_param.cfgdes[15]	//флаг сброса
-
-
+#define  EEPROM_OFFSET          sensors_param.cfgdes[16]	//начальный адрес настроек в eeprom
+uint16_t eeprom_start_options = EEPROM_MAGIC_ADDR;
 
 uint32_t clean_water;		// объем чистой воды после последней промывки (литры)
 uint16_t percent;
 
-
+uint8_t started = 0;
 
 uint32_t wash_state = STATE_NORMA;
 uint32_t wash_type = WASH_FERRUM_FREE;
@@ -177,7 +180,7 @@ uint8_t configChanged = 0;
 					{203,LSENSFL3|LSENS32BIT,"WaterCnt2",TOPIC_WATER_COUNTER_2,&WATERCNT2,NULL}, \
 					{204,LSENSFL3|LSENS32BIT,"WaterCnt2Y",TOPIC_WATER_COUNTER_2_Y,&WATERCNT2_Y,NULL}, \
 					{205,LSENSFL3|LSENS32BIT,"WaterCnt2T",TOPIC_WATER_COUNTER_2_T,&WATERCNT2_T,NULL}, \
-					{206,LSENSFL0|LSENS32BIT,"WashState",TOPIC_WASH_STATE,&wash_state,NULL}, \
+					{206,LSENSFL0|LSENS32BIT,"WashState","washstate",&wash_state,NULL}, \
 					{207,LSENSFL0|LSENS32BIT,"WashTime","washtime",&wash_duration,NULL}, \
 					{208,LSENSFL0|LSENS32BIT,"WashCnt","washcnt",&wash_count,NULL}, \
 					{209,LSENSFL0|LSENS32BIT,"WashStart",TOPIC_WASH_START,&WASH_START_TS,NULL}, \
@@ -259,7 +262,7 @@ void ICACHE_FLASH_ATTR mqtt_send_wash_end()
 uint32_t ICACHE_FLASH_ATTR read_eeprom(uint16_t addr)
 {
 	uint32_t val;
-	read_24cxx(EEPROM_ADDR, addr, (uint8_t*)&val, 4);
+    read_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
 	if ( val == 0xFFFFFFFF ) val = 0;
 	return val;
 }
@@ -269,7 +272,7 @@ void ICACHE_FLASH_ATTR write_eeprom(uint16_t addr, uint32_t val)
 	uint32_t v = read_eeprom(addr);
 	if ( v != val)	
 	{
-		write_24cxx(EEPROM_ADDR, addr, (uint8_t*)&val, 4);
+		write_24cxx(EEPROM_ADDR, addr - EEPROM_MAGIC_ADDR + eeprom_start_options, (uint8_t*)&val, 4);
 		os_delay_us(10);
 	}
 }
@@ -392,6 +395,8 @@ void ICACHE_FLASH_ATTR read_gpio_cb()
 		ts2 = 0;
 	}	
 	
+    if (started == 0) return;
+
 	pcf_data = pcfgpior8(0x20);
 	
 	// грязный хак: перед тем как прочитать состояние гпио как входа, надо этот пин пометить как вход (1) записью в pcf
@@ -606,10 +611,19 @@ void ICACHE_FLASH_ATTR reset_all()
 	RESET_ALL = 0;
 
 	save_options();
-	//save_eeprom();
 }
 
-void mqtt_receive(char *topicBuf, char *dataBuf) {
+uint8_t ICACHE_FLASH_ATTR process_message(const char *dataBuf, int32_t *val) {
+	int32_t m = atoi(dataBuf);
+	if (m != *val) {
+		*val = m;
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+void ICACHE_FLASH_ATTR mqtt_receive(char *topicBuf, char *dataBuf) {
 	char lwt[64];
     uint16_t lentopic = os_sprintf(lwt, "%s/%s" topicwrite "/", sensors_param.mqttlogin, sensors_param.hostname);
 	char *topic = (char *) os_strstr(topicBuf, lwt);
@@ -617,66 +631,27 @@ void mqtt_receive(char *topicBuf, char *dataBuf) {
 		topic += lentopic;
 		if (!strcoll(topic, TOPIC_WATER_CLEAN_VOLUME)) {
 			// обрабатываем полученное значение топика dataBuf , например через atoi
-			//configChanged = configChanged | process_message(dataBuf, &CLEAN_WATER_VOLUME);
-			int32_t m = atoi(dataBuf);
-			if (m != CLEAN_WATER_VOLUME) {
-				CLEAN_WATER_VOLUME = m;
-				configChanged = 1;
-			}
+			configChanged = configChanged | process_message(dataBuf, &CLEAN_WATER_VOLUME);
 		} else if (!strcoll(topic, TOPIC_DAYS_BEFORE_WASHING)) {
-			int32_t m = atoi(dataBuf);
-			if (m != DAYS_BEFORE_WASHING) {
-				DAYS_BEFORE_WASHING = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &DAYS_BEFORE_WASHING);			
 		} else if (!strcoll(topic, TOPIC_RESET)) {
-			int32_t m = atoi(dataBuf);
-			if (m != RESET_ALL) {
-				RESET_ALL = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &RESET_ALL);		
 		} else if (!strcoll(topic, TOPIC_WASH_START)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WASH_START_TS) {
-				WASH_START_TS = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WASH_START_TS);			
+		} else if (!strcoll(topic, TOPIC_WASH_END)) {
+            configChanged = configChanged | process_message(dataBuf, &wash_end_ts);		
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT1) {
-				WATERCNT1 = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT1);			
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1_Y)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT1_Y) {
-				WATERCNT1_Y = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT1_Y);			
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1_T)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT1_T) {
-				WATERCNT1_T = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT1_T);			
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT2) {
-				WATERCNT2 = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT2);			
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2_Y)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT2_Y) {
-				WATERCNT2_Y = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT2_Y);		
 		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2_T)) {
-			int32_t m = atoi(dataBuf);
-			if (m != WATERCNT2_T) {
-				WATERCNT2_T = m;
-				configChanged = 1;
-			}			
+            configChanged = configChanged | process_message(dataBuf, &WATERCNT2_T);			
 		} else if (!strcoll(topic, TOPIC_WASH_STATE)) {
 			int32_t m = atoi(dataBuf);
             if ( m  == 0) {
@@ -692,7 +667,14 @@ void mqtt_receive(char *topicBuf, char *dataBuf) {
 void ICACHE_FLASH_ATTR startfunc()
 {
 
-	//читаем данные из eeprom в переменные, если magic не корректный, то обнуляем переменные и записываем в eeprom
+	 if (EEPROM_OFFSET > 4096-20 || EEPROM_OFFSET < 16) {
+        eeprom_start_options = EEPROM_MAGIC_ADDR;
+    } else {
+        eeprom_start_options = EEPROM_OFFSET;
+    }         
+       
+ 
+    //читаем данные из eeprom в переменные, если magic не корректный, то обнуляем переменные и записываем в eeprom
 	uint32_t val32 = 0xFFFF;
 	val32 = read_eeprom(EEPROM_MAGIC_ADDR);
 	if ( val32 == RTC_MAGIC ) 
@@ -708,6 +690,7 @@ void ICACHE_FLASH_ATTR startfunc()
 		
 		WASH_START_TS = read_eeprom(EEPROM_WASH_START_DT_ADDR);
 		wash_end_ts = read_eeprom(EEPROM_WASH_END_DT_ADDR);
+		if (wash_end_ts == 0) wash_end_ts = WASH_START_TS;
 		
 		watercnt2_change_ts = read_eeprom(EEPROM_WATERCNT2_CHANGE_TS_ADDR);
 		
@@ -758,7 +741,7 @@ void ICACHE_FLASH_ATTR startfunc()
 		clean_water = 0;	
 		CLEAN_WATER_VOLUME = 0;
 
-		save_eeprom();
+		//save_eeprom();
 		save_options();
 	}
 	
@@ -776,6 +759,9 @@ void ICACHE_FLASH_ATTR startfunc()
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) 
 {
+    if (timersrc < 15) return;
+    if (timersrc == 15) started = 1;
+
 	if ( RESET_ALL == 1 )
 	{
 		reset_all();
@@ -802,47 +788,47 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 		percent = (clean_water*100)/CLEAN_WATER_VOLUME;
 	}
 	
-	// автоматическая фиксация начала промывки ( если по счетчику 2 начал увеличиваться расход, но факта начала промывки не зафиксировано)
-	if ( 
-		wash_state == STATE_NORMA 	// режима Норма, промывка не включена
-		&& WATERCNT2 - WASH_CNT2_END > AUTO_WASH_START_DELTA // показания счетчика увеличились на 30 литров
-		&& WASH_START_TS <= TIMESTAMP_DEFAULT
-	   )
-	{
-		// автоматическое определение начала промывки
-		do_wash_start(AUTO_WASH_START_DELTA);	
-	}
+	// // автоматическая фиксация начала промывки ( если по счетчику 2 начал увеличиваться расход, но факта начала промывки не зафиксировано)
+	// if ( 
+	// 	wash_state == STATE_NORMA 	// режима Норма, промывка не включена
+	// 	&& WATERCNT2 - WASH_CNT2_END > AUTO_WASH_START_DELTA // показания счетчика увеличились на 30 литров
+	// 	&& WASH_START_TS <= TIMESTAMP_DEFAULT
+	//    )
+	// {
+	// 	// автоматическое определение начала промывки
+	// 	do_wash_start(AUTO_WASH_START_DELTA);	
+	// }
 	
 
-	// автоматическая фиксация завершения промывки
-	uint32_t ts = GET_TS();
-	if ( 	
-		wash_state == STATE_WASH 
-		&& ts > TIMESTAMP_DEFAULT  
-		&& WASH_START_TS > TIMESTAMP_DEFAULT
-		&& WASH_START_TS > wash_end_ts						 // время начала больше времени предыдущего окончания
-	    && (
-			  (ts - watercnt2_change_ts) / 60  >= WASH_AUTO_END // время последнего изменения показаний счетчика 2 и если показания не изменялись более 30 мин, значит промывка завершилась
-	          || WATERCNT1 - WASH_CNT1_START >= 20				 // показания счетчика 1 изменились на 20 литров (а при промывке у нас счетчик 1 не должен изменять показания)
-		   )
-	   )
-	{
-		// промывка длится более 5 часов, значит забыли вручную зафиксировать завершение промывки, зафиксируем автоматически
-		// отключаем режим промывки
-		do_wash_end(AUTO_WASH_END_DELTA);		 // TODO: срабатывает и сбрасывает state
-	}		
+	// // автоматическая фиксация завершения промывки
+	// uint32_t ts = GET_TS();
+	// if ( 	
+	// 	wash_state == STATE_WASH 
+	// 	&& ts > TIMESTAMP_DEFAULT  
+	// 	&& WASH_START_TS > TIMESTAMP_DEFAULT
+	// 	&& WASH_START_TS > wash_end_ts						 // время начала больше времени предыдущего окончания
+	//     && (
+	// 		  (ts - watercnt2_change_ts) / 60  >= WASH_AUTO_END // время последнего изменения показаний счетчика 2 и если показания не изменялись более 30 мин, значит промывка завершилась
+	//           || WATERCNT1 - WASH_CNT1_START >= 20				 // показания счетчика 1 изменились на 20 литров (а при промывке у нас счетчик 1 не должен изменять показания)
+	// 	   )
+	//    )
+	// {
+	// 	// промывка длится более 5 часов, значит забыли вручную зафиксировать завершение промывки, зафиксируем автоматически
+	// 	// отключаем режим промывки
+	// 	do_wash_end(AUTO_WASH_END_DELTA);		 // TODO: срабатывает и сбрасывает state
+	// }		
 
     // если пришли изменения по mqtt
     if (configChanged == 1) {
         save_options();
-        save_eeprom();
+        //save_eeprom();
         configChanged = 0;
     } 
     else if (timersrc%1800==0)  //30*60 сек  каждые 30 мин сохраняем данные во флеш и если не было изменений по mqtt
 	{
 		//SAVEOPT;
 		save_options();
-        save_eeprom(); // это работает каждую секунду!!!
+        //save_eeprom(); // это работает каждую секунду!!!
 	}    
 }
 
