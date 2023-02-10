@@ -1,4 +1,4 @@
-#define FW_VER "2.3"
+#define FW_VER "2.4"
 
 /*
 Options:
@@ -149,7 +149,7 @@ void receiveMqtt(char *topicBuf,char *dataBuf){
         int32_t m = atoi(dataBuf);
         ESP_LOGI("MQTT", "received fan speed  = %d", m);
         if (FAN_SPEED == m) return;
-        FAN_SPEED = m;
+        FAN_SPEED = (m <= 3) ? m : 0;
     } else if ( strstr(topic, "fade") != NULL ) {
         char *istr;
         ESP_LOGI("MQTT", "received fade  = %s", topic);
