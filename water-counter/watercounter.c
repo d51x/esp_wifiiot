@@ -1,9 +1,16 @@
 /*
+2.65 - передача Clean_water в mqtt
+	   передача CleanVolume в mqtt и прием
+       передача и прием по mqtt значений счетчиков для корректировки
+       reset показаний по mqtt
+
 версия 2.хх - добавляю работу с eeprom (24c64), убрал rtc mem
 
 // Количество настроек: Счетчик1 GPIO,Расход1 общий,Расход1 сегодня,Расход1 вчера,Счетчик2 GPIO,Расход2 общий,Расход2 сегодня,Расход2 вчера,Последняя промывка,Счетчик1-промывка,Счетчик2-промывка-до,Счетчик2-промывка-после,Объем до промывки,Дней до промывки,Автоотключение промывки (мин),Сбросить все
 
 */
+#define FW_VER "2.65"
+
 os_timer_t gpio_timer;
 
 #define millis() (unsigned long) (micros() / 1000ULL)
@@ -59,6 +66,22 @@ static uint32_t btn2_pressed = 0;
 #define TOPIC_WASH_START 	"washstart"
 #define TOPIC_WASH_END 		"washend"
 #define TOPIC_WASH_LITRES 	"washlitres"
+#define TOPIC_WATER_CLEAN_VOLUME 	"cleanVolume" // объем чистой воды
+#define TOPIC_RESET 	"reset"
+#define TOPIC_DAYS_BEFORE_WASHING 	"daysBefore" // дней до следующей промывки
+#define TOPIC_WATER_COUNTER_1 	"watercnt1"
+#define TOPIC_WATER_COUNTER_1_Y 	"watercnt1y"
+#define TOPIC_WATER_COUNTER_1_T 	"watercnt1t"
+#define TOPIC_WATER_COUNTER_2 	"watercnt2"
+
+#define TOPIC_WATER_COUNTER_1_WASH_AFTER 	"watercnt1after"
+#define TOPIC_WATER_COUNTER_1_WASH_BEFORE 	"watercnt1before"
+
+#define TOPIC_WATER_COUNTER_2_Y 	"watercnt2y"
+#define TOPIC_WATER_COUNTER_2_T 	"watercnt2t"
+
+#define TOPIC_WATER_COUNTER_2_WASH_AFTER 	"watercnt2after"
+#define TOPIC_WATER_COUNTER_2_WASH_BEFORE 	"watercnt2before"
 
 #define EEPROM_ADDR							0x50
 
@@ -108,7 +131,7 @@ uint32_t wash_cnt2_switch = 0;							// показания счетчика 2 п
 
 #define  CLEAN_WATER_VOLUME 	sensors_param.cfgdes[12]	//10000 	// 10 кубов, объем чистой воды до следующей промывки		// можно выставлять через интерпретер
 
-#define  WASH_AFTER_DAYS 		sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
+#define  DAYS_BEFORE_WASHING 		sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
 #define  WASH_AUTO_END 			sensors_param.cfgdes[14]	//30  	// автовыключение промывки
 #define  RESET_ALL 				sensors_param.cfgdes[15]	//флаг сброса
 
@@ -126,6 +149,8 @@ uint32_t wash_count = 0;			// кол-во промывок
 uint32_t wash_duration = 0;
 
 uint8_t reset = 0;
+
+uint8_t configChanged = 0;
 
 #define PASSED_DAY_AFTER_WASH() ( (GET_TS()  - wash_end_ts ) / (3600*24) )
 
@@ -145,18 +170,21 @@ uint8_t reset = 0;
 // 					{211,LSENSFL0,"WashResrc","washrsrc",&percent,NULL}, 
 
 
-#define ADDLISTSENS {200,LSENSFL3|LSENS32BIT,"WaterCnt1","watercnt1",&WATERCNT1,NULL}, \
-					{201,LSENSFL3|LSENS32BIT,"WaterCnt1Y","watercnt1y",&WATERCNT1_Y,NULL}, \
-					{202,LSENSFL3|LSENS32BIT,"WaterCnt1T","watercnt1t",&WATERCNT1_T,NULL}, \
-					{203,LSENSFL3|LSENS32BIT,"WaterCnt2","watercnt2",&WATERCNT2,NULL}, \
-					{204,LSENSFL3|LSENS32BIT,"WaterCnt2Y","watercnt2y",&WATERCNT2_Y,NULL}, \
-					{205,LSENSFL3|LSENS32BIT,"WaterCnt2T","watercnt2t",&WATERCNT2_T,NULL}, \
+#define ADDLISTSENS {200,LSENSFL3|LSENS32BIT,"WaterCnt1",TOPIC_WATER_COUNTER_1,&WATERCNT1,NULL}, \
+					{201,LSENSFL3|LSENS32BIT,"WaterCnt1Y",TOPIC_WATER_COUNTER_1_Y,&WATERCNT1_Y,NULL}, \
+					{202,LSENSFL3|LSENS32BIT,"WaterCnt1T",TOPIC_WATER_COUNTER_1_T,&WATERCNT1_T,NULL}, \
+					{203,LSENSFL3|LSENS32BIT,"WaterCnt2",TOPIC_WATER_COUNTER_2,&WATERCNT2,NULL}, \
+					{204,LSENSFL3|LSENS32BIT,"WaterCnt2Y",TOPIC_WATER_COUNTER_2_Y,&WATERCNT2_Y,NULL}, \
+					{205,LSENSFL3|LSENS32BIT,"WaterCnt2T",TOPIC_WATER_COUNTER_2_T,&WATERCNT2_T,NULL}, \
 					{206,LSENSFL0|LSENS32BIT,"WashState","washstate",&wash_state,NULL}, \
 					{207,LSENSFL0|LSENS32BIT,"WashTime","washtime",&wash_duration,NULL}, \
 					{208,LSENSFL0|LSENS32BIT,"WashCnt","washcnt",&wash_count,NULL}, \
-					{209,LSENSFL0|LSENS32BIT,"WashStart","washstart",&WASH_START_TS,NULL}, \
-					{210,LSENSFL0|LSENS32BIT,"WashEnd","washend",&wash_end_ts,NULL}, \
-					{211,LSENSFL0,"WashResrc","washrsrc",&percent,NULL}, 
+					{209,LSENSFL0|LSENS32BIT,"WashStart",TOPIC_WASH_START,&WASH_START_TS,NULL}, \
+					{210,LSENSFL0|LSENS32BIT,"WashEnd",TOPIC_WASH_END,&wash_end_ts,NULL}, \
+					{211,LSENSFL0,"WashResrc","washrsrc",&percent,NULL}, \
+					{212,LSENSFL3|LSENS32BIT,"CleanWater","watercln",&clean_water,NULL}, \
+					{213,LSENSFL0|LSENS32BIT,"CleanVolume",TOPIC_WATER_CLEAN_VOLUME,&CLEAN_WATER_VOLUME,NULL}, \
+					{214,LSENSFL0|LSENS32BIT,"WashAfterDays",TOPIC_DAYS_BEFORE_WASHING,&DAYS_BEFORE_WASHING,NULL}, 
 
 uint8_t pcf_data;
 	
@@ -577,7 +605,90 @@ void ICACHE_FLASH_ATTR reset_all()
 	RESET_ALL = 0;
 
 	save_options();
-	save_eeprom();
+	//save_eeprom();
+}
+
+// uint8_t process_message(const char *dataBuf, int32_t *val) {
+// 	int32_t m = atoi(dataBuf);
+// 	if (m != *val) {
+// 		*val = m;
+// 		return 1;
+// 	} else {
+// 		return 0;
+// 	}
+// }
+
+void mqtt_receive(char *topicBuf, char *dataBuf) {
+	char lwt[64];
+    uint16_t lentopic = os_sprintf(lwt, "%s/%s" topicwrite "/", sensors_param.mqttlogin, sensors_param.hostname);
+	char *topic = (char *) os_strstr(topicBuf, lwt);
+	if (topic != NULL) {
+		topic += lentopic;
+		if (!strcoll(topic, TOPIC_WATER_CLEAN_VOLUME)) {
+			// обрабатываем полученное значение топика dataBuf , например через atoi
+			//configChanged = configChanged | process_message(dataBuf, &CLEAN_WATER_VOLUME);
+			int32_t m = atoi(dataBuf);
+			if (m != CLEAN_WATER_VOLUME) {
+				CLEAN_WATER_VOLUME = m;
+				configChanged = 1;
+			}
+		} else if (!strcoll(topic, TOPIC_DAYS_BEFORE_WASHING)) {
+			int32_t m = atoi(dataBuf);
+			if (m != DAYS_BEFORE_WASHING) {
+				DAYS_BEFORE_WASHING = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_RESET)) {
+			int32_t m = atoi(dataBuf);
+			if (m != RESET_ALL) {
+				RESET_ALL = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WASH_START)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WASH_START_TS) {
+				WASH_START_TS = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT1) {
+				WATERCNT1 = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1_Y)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT1_Y) {
+				WATERCNT1_Y = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_1_T)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT1_T) {
+				WATERCNT1_T = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT2) {
+				WATERCNT2 = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2_Y)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT2_Y) {
+				WATERCNT2_Y = m;
+				configChanged = 1;
+			}			
+		} else if (!strcoll(topic, TOPIC_WATER_COUNTER_2_T)) {
+			int32_t m = atoi(dataBuf);
+			if (m != WATERCNT2_T) {
+				WATERCNT2_T = m;
+				configChanged = 1;
+			}			
+		}
+	}
+
 }
 
 void ICACHE_FLASH_ATTR startfunc()
@@ -661,7 +772,8 @@ void ICACHE_FLASH_ATTR startfunc()
 	os_timer_disarm(&gpio_timer);
 	os_timer_setfn(&gpio_timer, (os_timer_func_t *)read_gpio_cb, NULL);
 	os_timer_arm(&gpio_timer, 100, 1);
-
+   
+    cb_mqtt_funs = mqtt_receive;
 }
 
 void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc) 
@@ -673,12 +785,6 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 
 	if ( CLEAN_WATER_VOLUME < 1000 ) CLEAN_WATER_VOLUME = CLEAN_WATER_VOLUME_DEFAULT;
 	
-	if (timersrc%1800==0)  //30*60 сек  каждые 30 мин сохраняем данные во флеш
-	{
-		//SAVEOPT;
-		save_options();
-	}
-
 	if ( time_loc.hour == 0 && time_loc.min == 0 && time_loc.sec == 0 )
 	{
 		// обнулить суточные данные ночью
@@ -698,8 +804,6 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 		percent = (clean_water*100)/CLEAN_WATER_VOLUME;
 	}
 	
-	save_eeprom();
-
 	// автоматическая фиксация начала промывки ( если по счетчику 2 начал увеличиваться расход, но факта начала промывки не зафиксировано)
 	if ( 
 		wash_state == STATE_NORMA 	// режима Норма, промывка не включена
@@ -729,6 +833,19 @@ void ICACHE_FLASH_ATTR timerfunc(uint32_t  timersrc)
 		// отключаем режим промывки
 		do_wash_end(AUTO_WASH_END_DELTA);		 // TODO: срабатывает и сбрасывает state
 	}		
+
+    // если пришли изменения по mqtt
+    if (configChanged == 1) {
+        save_options();
+        save_eeprom();
+        configChanged = 0;
+    } 
+    else if (timersrc%1800==0)  //30*60 сек  каждые 30 мин сохраняем данные во флеш и если не было изменений по mqtt
+	{
+		//SAVEOPT;
+		save_options();
+        save_eeprom(); // это работает каждую секунду!!!
+	}    
 }
 
 void webfunc(char *pbuf) {
@@ -876,5 +993,5 @@ void webfunc(char *pbuf) {
  	// os_sprintf(HTTPBUFF,"<br> watercnt2_change_ts: %d", watercnt2_change_ts); 
  	// os_sprintf(HTTPBUFF,"<br> XXX / TS: %d", GET_TS()); 
 
-	os_sprintf(HTTPBUFF,"<br><br> <small>FW ver. %s</small>", "2.64");
+	os_sprintf(HTTPBUFF,"<br><br> <small>FW ver. %s</small>", FW_VER);
 }
