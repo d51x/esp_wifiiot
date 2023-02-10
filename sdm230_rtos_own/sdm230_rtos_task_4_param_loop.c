@@ -11,24 +11,37 @@
  */
 #include "driver/uart.h"
 
-#define MQTTD
+#define FW_VER_NUM "2.0"
 
-//#define DEBUG
-#define FW_VER_NUM "1.9"
+	/*
+	* SDM Task Delay
+	* MQTT Send Interval
+	* Значения превышения по току
+	* время срабатывания (мсек)
+	* время отпускания сек
 
-#ifdef DEBUG
-#define FW_VER FW_VER_NUM  ".1 debug"
-#else
-#define FW_VER FW_VER_NUM
-#endif	
+	sensors_param.cfgdes -  12
+		cfgdes[0] - задержка чтения данных с SDM
+		cfgdes[1] - время отправки данных с SDM по mqtt
+		cfgdes[2] - превышение по току	
+		cfgdes[3] - время определения перегрузки, мсек, control_current_delay
+		cfgdes[4] - время определения отсутствия перегрузки, сек, control_load_on_delay
 
-#define DELAYED_START					60   //sec
+	*/
+	#define SENS sensors_param
+	#define SENSCFG SENS.cfgdes
 
-#define UART_READ_TIMEOUT					1000  // влияет на результаты чтения из юсарт
+#define DELAYED_START				60   //sec
+#define UART_READ_TIMEOUT			1000  // влияет на результаты чтения из юсарт
+#define CUT_OFF_INCORRECT_VALUE		1	// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
+#define UART_BUFFER_RAED_DELAY 		30
+#define SDM_PAUSE_TASK 				50 // msec
 
-#define CUT_OFF_INCORRECT_VALUE			// если ток превышает 100А, напряжение 400В (или 0В), мощность 25 кВт, то текущему значению присваивается предыдущее
-#define UART_BUFFER_RAED_DELAY 	30
-#define SDM_PAUSE_TASK 	50
+#define CHECK_ERROR_COUNT			100
+
+#define RESET_LOAD_GPIO				2
+#define GPIO_OFF					0
+#define GPIO_ON						1
 
 #define SDM_ADDR					0x0001
 #define SDM_VOLTAGE 				0x0000
@@ -36,6 +49,7 @@
 #define SDM_POWER   				0x000C
 #define SDM_ENERGY  				(uint16_t)0x0156
 #define SDM_ENERGY_RESETTABLE  		(uint16_t)0x0180
+#define SDM_NO_COMMAND				0xFFFF
 
 #define BUF_SIZE (1024)      
 
@@ -68,20 +82,17 @@ typedef struct SDMCommand_response {
 #define RESPONSE_SIZE sizeof(SDMCommand_response_t)
 #define RESPONSE_DATA_SIZE 4
 
-#ifdef MQTTD
-	#define MQTT_SEND_INTERVAL 10 // sec
-	#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
-	#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
-	#define POWER_MQTT_TOPIC_PARAM		"pmw"
-	#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
-	#define MQTT_PAYLOAD_BUF 20
-	//MQTT_Client* mqtt_client;    //for non os sdk
-	char payload[MQTT_PAYLOAD_BUF];
-	uint32_t mqtt_send_interval_sec = MQTT_SEND_INTERVAL;
 
-	static TimerHandle_t mqtt_send_timer;	
-	void vMqttSendTimerCallback( TimerHandle_t xTimer );
-#endif
+#define MQTT_SEND_INTERVAL 	10 // sec
+#define VOLTAGE_MQTT_TOPIC_PARAM	"pmv"
+#define CURRENT_MQTT_TOPIC_PARAM	"pmc"
+#define POWER_MQTT_TOPIC_PARAM		"pmw"
+#define ENERGY_MQTT_TOPIC_PARAM		"pmwh"
+#define mqtt_send_interval_sec 		SENSCFG[1]
+#define OVERLOAD_MQTT_TOPIC_PARAM	"overload"
+TimerHandle_t mqtt_send_timer;	
+void vMqttSendTimerCallback( TimerHandle_t xTimer );
+
 
 
 float voltage = 0;
@@ -152,63 +163,68 @@ static void uart_init() {
 #endif	
 }
 
-uint8_t get_config_values(uint8_t r) {   // return 0 - no need reinitialize, 1 - need reinitialize
-	uint8_t reinit = 0;
-	//reinit =  r && (pzem_enabled != sensors_param.cfgdes[0]);  // данные изменились
-	sdm_enabled = (sensors_param.cfgdes[0] > 0) ? 1 : 0;  // читать данные pzem
-
-#ifdef MQTTD	
-	//reinit = r && (mqtt_send_interval_sec != sensors_param.cfgdes[1]);
-	mqtt_send_interval_sec = (sensors_param.cfgdes[1] == 0) ? sensors_param.mqttts : sensors_param.cfgdes[1];		
-#endif	
-
-	return reinit;
+void mqttSendInt(const char *topic, uint32_t value){
+	char payload[20];
+	os_sprintf(payload,"%d", value);
+	MQTT_Publish(topic, payload, os_strlen(payload), 2, 0, 0);
 }
 
-void startfunc(){
-	// выполняется один раз при старте модуля.
-	 uart_init();	  
-#ifdef DEBUG	 
-	 userlog("\nFiwrmware: %s \n", FW_VER);
-#endif 
-	get_config_values(0);
-	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
-	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
-
-#ifdef DEBUG	
-	if ( system_start_timer == NULL ) {
-		userlog("FAIL: Timer system_start_timer was not created \n");
+void mqttSendFloat(const char *topic, float value, uint8_t divider){
+	char payload[20];
+	if (divider == 0) {
+		os_sprintf(payload,"%d", (int)value);
 	} else {
-		userlog("PASS: Timer system_start_timer was created \n");
+		os_sprintf(payload,"%d.%d", (int)value, (int)(value * divider) % divider);
 	}
-#endif
-
-BaseType_t b = xTimerStart( system_start_timer, 0);
-
-#ifdef DEBUG	
-	if ( b != pdPASS ) {
-		userlog("FAIL: the timer system_start_timer couldn't start\n");
-	} else {
-		userlog("PASS: the timer system_start_timer was started\n");
-	}
-#endif	
+	MQTT_Publish(topic, payload, os_strlen(payload), 2, 0, 0);
 }
 
-void timerfunc(uint32_t  timersrc) {
-	// выполнение кода каждую 1 секунду
-	get_config_values(1);
-
-	if(timersrc%30==0){
-		// выполнение кода каждые 30 секунд
+void get_config() { 
+	uint8_t needSave = 0;
+	if (sdm_task_delay == 0) {
+		sdm_task_delay = SDM_PAUSE_TASK_MS;
+		needSave = 1;
 	}
 	
-	if ( delayed_counter > 0 ) { 
-		delayed_counter--;
-#ifdef DEBUG		
-		userlog("countdown: %d\n", delayed_counter);
-#endif		
+	if (mqtt_send_interval_sec < 2) {
+		mqtt_send_interval_sec = sensors_param.mqttts;
+		needSave = 1;
 	}
-	pauseTask(1000);
+
+	uint16_t prev_treshhold = overload_treshold;
+	if (overload_treshold == 0 || overload_treshold > 300) {
+		overload_treshold = OVERLOAD_TRESHOLD;
+		needSave = 1;
+	}
+
+	if ( prev_treshhold != overload_treshold ) {
+		// поменялось значение в настройках, надо обновить valdes[0]
+		prev_treshhold = overload_treshold;
+		valdes[0] = overload_treshold;
+		mqttSendInt("valdes1", valdes[0]);
+	} else {
+		// значение не менялось, но могло поменяться в valdes[0]
+		uint16_t tmp_current_treshold = valdes[0];  // получили по mqtt или через get, но здесь может быть и предыдущее значение
+		if ( tmp_current_treshold > 0 && tmp_current_treshold != overload_treshold ) {  
+			// значение в valdes[0] отличается от текущего и в опциях
+			overload_treshold = tmp_current_treshold;
+			needSave = 1;
+		}
+	}
+
+	if (overload_detect_delay == 0) {
+		overload_detect_delay = OVERLOAD_DETECT_DELAY_MS;
+		needSave = 1;
+	}
+
+	if (overload_time == 0) {
+		overload_time = OVERLOAD_TIME;
+		needSave = 1;
+	}
+
+	if ( needSave == 1) {
+		SAVEOPT;
+	}
 }
 
 void vSystemStartTimerCallback( TimerHandle_t xTimer ){
@@ -488,76 +504,54 @@ uint16_t sdm_crc(uint8_t *data, uint8_t sz) {
 }
 
 void send_buffer(const uint8_t *buffer, uint8_t len){
-/*
-#ifdef DEBUG
-	userlog("%s:        ", __func__);
-	for (uint8_t i = 0; i < len; i++ ) {
-		userlog("%02X ", buffer[i]);
-	}
-	userlog("\n");
-#endif
-*/
 	uart_write_bytes(UART_NUM_0, (const char *) buffer, len);
 	vTaskDelay(10);
 }
 
 uint8_t read_buffer(uint8_t *buffer, uint8_t cnt){
-/*
-	#ifdef DEBUG
-		userlog("                            %s\n:        ", __func__);
-	#endif
-*/
 	int8_t result = 0;
 	result = uart_read_bytes(UART_NUM_0, buffer, cnt, UART_READ_TIMEOUT / portTICK_RATE_MS );
 	
 	if 	( result < 0 ) { result = 0;	}
-/*
-	#ifdef DEBUG
-	userlog("                            len: %d       ", result);
-
-	for (uint8_t i = 0; i < result; i++ ) {
-		userlog("%02X ", buffer[i]);
-	}
-	userlog("\n");
-#endif
-*/
 	return result;
 }
 
-
-#ifdef MQTTD
 void vMqttSendTimerCallback( TimerHandle_t xTimer ) {
-	//userlog("%s\n", __func__);
-	if ( sensors_param.mqtten != 1 ) return;
-
-	//userlog("enabled send mqtt\n");
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d.%d", (int)voltage, 		(int)(voltage*10) % 10);
-	MQTT_Publish(client, VOLTAGE_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	pauseTask(20);
-
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d.%d", (int)current, 		(int)(current*100) % 100);
-	MQTT_Publish(client, CURRENT_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	pauseTask(20);
-
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", (int)power);
-	MQTT_Publish(client, POWER_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	pauseTask(20);
-
-	memset(payload, 0, MQTT_PAYLOAD_BUF);
-	os_sprintf(payload,"%d", (int)energy);
-	MQTT_Publish(client, ENERGY_MQTT_TOPIC_PARAM, payload, os_strlen(payload), 2, 0, 1);
-	pauseTask(20);
+	mqttSendFloat(VOLTAGE_MQTT_TOPIC_PARAM, voltage, 10);
+	mqttSendFloat(CURRENT_MQTT_TOPIC_PARAM, current, 100);
+	mqttSendFloat(POWER_MQTT_TOPIC_PARAM, power, 0);
+	mqttSendFloat(ENERGY_MQTT_TOPIC_PARAM, energy, 100);
 }	
-#endif
+
 
 
 void show_countdown(uint8_t cnt) {
 	if ( cnt > 0 ) {
 		os_sprintf(HTTPBUFF,"<br>До начала чтения данных счетчика осталось %d секунд", cnt);
 	}
+}
+
+void startfunc(){
+	// выполняется один раз при старте модуля.
+	uart_init();	  
+	get_config();
+	 // запуск таймера, чтобы мой основной код начал работать через Х секунд после старта, чтобы успеть запустить прошивку
+	system_start_timer = xTimerCreate("system start timer", pdMS_TO_TICKS( DELAYED_START * 1000 ), pdFALSE, 0, vSystemStartTimerCallback);
+	BaseType_t b = xTimerStart( system_start_timer, 0);	
+}
+
+void timerfunc(uint32_t  timersrc) {
+	// выполнение кода каждую 1 секунду
+	get_config();
+
+	if(timersrc%30==0){
+		// выполнение кода каждые 30 секунд
+	}
+	
+	if ( delayed_counter > 0 ) { 
+		delayed_counter--;
+	}
+	pauseTask(1000);
 }
 
 void webfunc(char *pbuf) {
