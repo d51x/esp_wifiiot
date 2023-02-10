@@ -1,4 +1,5 @@
 /*
+2.66 - прием wash_state по mqtt
 2.65 - передача Clean_water в mqtt
 	   передача CleanVolume в mqtt и прием
        передача и прием по mqtt значений счетчиков для корректировки
@@ -9,7 +10,7 @@
 // Количество настроек: Счетчик1 GPIO,Расход1 общий,Расход1 сегодня,Расход1 вчера,Счетчик2 GPIO,Расход2 общий,Расход2 сегодня,Расход2 вчера,Последняя промывка,Счетчик1-промывка,Счетчик2-промывка-до,Счетчик2-промывка-после,Объем до промывки,Дней до промывки,Автоотключение промывки (мин),Сбросить все
 
 */
-#define FW_VER "2.65"
+#define FW_VER "2.66.2"
 
 os_timer_t gpio_timer;
 
@@ -131,7 +132,7 @@ uint32_t wash_cnt2_switch = 0;							// показания счетчика 2 п
 
 #define  CLEAN_WATER_VOLUME 	sensors_param.cfgdes[12]	//10000 	// 10 кубов, объем чистой воды до следующей промывки		// можно выставлять через интерпретер
 
-#define  DAYS_BEFORE_WASHING 		sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
+#define  DAYS_BEFORE_WASHING 	sensors_param.cfgdes[13]	//14  	// новая промывка через Х дней после прошедшей
 #define  WASH_AUTO_END 			sensors_param.cfgdes[14]	//30  	// автовыключение промывки
 #define  RESET_ALL 				sensors_param.cfgdes[15]	//флаг сброса
 
@@ -176,7 +177,7 @@ uint8_t configChanged = 0;
 					{203,LSENSFL3|LSENS32BIT,"WaterCnt2",TOPIC_WATER_COUNTER_2,&WATERCNT2,NULL}, \
 					{204,LSENSFL3|LSENS32BIT,"WaterCnt2Y",TOPIC_WATER_COUNTER_2_Y,&WATERCNT2_Y,NULL}, \
 					{205,LSENSFL3|LSENS32BIT,"WaterCnt2T",TOPIC_WATER_COUNTER_2_T,&WATERCNT2_T,NULL}, \
-					{206,LSENSFL0|LSENS32BIT,"WashState","washstate",&wash_state,NULL}, \
+					{206,LSENSFL0|LSENS32BIT,"WashState",TOPIC_WASH_STATE,&wash_state,NULL}, \
 					{207,LSENSFL0|LSENS32BIT,"WashTime","washtime",&wash_duration,NULL}, \
 					{208,LSENSFL0|LSENS32BIT,"WashCnt","washcnt",&wash_count,NULL}, \
 					{209,LSENSFL0|LSENS32BIT,"WashStart",TOPIC_WASH_START,&WASH_START_TS,NULL}, \
@@ -608,16 +609,6 @@ void ICACHE_FLASH_ATTR reset_all()
 	//save_eeprom();
 }
 
-// uint8_t process_message(const char *dataBuf, int32_t *val) {
-// 	int32_t m = atoi(dataBuf);
-// 	if (m != *val) {
-// 		*val = m;
-// 		return 1;
-// 	} else {
-// 		return 0;
-// 	}
-// }
-
 void mqtt_receive(char *topicBuf, char *dataBuf) {
 	char lwt[64];
     uint16_t lentopic = os_sprintf(lwt, "%s/%s" topicwrite "/", sensors_param.mqttlogin, sensors_param.hostname);
@@ -686,6 +677,13 @@ void mqtt_receive(char *topicBuf, char *dataBuf) {
 				WATERCNT2_T = m;
 				configChanged = 1;
 			}			
+		} else if (!strcoll(topic, TOPIC_WASH_STATE)) {
+			int32_t m = atoi(dataBuf);
+            if ( m  == 0) {
+                do_wash_end(0);
+            } else {
+                do_wash_start(0);
+            }
 		}
 	}
 
